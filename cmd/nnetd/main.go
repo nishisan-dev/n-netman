@@ -11,7 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/lucas/n-netman/internal/config"
+	"github.com/lucas/n-netman/internal/controlplane"
+	"github.com/lucas/n-netman/internal/observability"
 	"github.com/lucas/n-netman/internal/reconciler"
 )
 
@@ -72,6 +76,40 @@ func main() {
 		cancel()
 	}()
 
+	// Initialize metrics
+	metrics := observability.NewMetrics(prometheus.DefaultRegisterer)
+	metrics.PeersConfigured.Set(float64(len(cfg.Overlay.Peers)))
+
+	// Start observability server (metrics + health)
+	obsServer := observability.NewServer(cfg, logger)
+	if err := obsServer.Start(ctx); err != nil {
+		slog.Error("failed to start observability server", "error", err)
+		os.Exit(1)
+	}
+	defer obsServer.Stop(context.Background())
+
+	// Initialize route table for control plane
+	routeTable := controlplane.NewRouteTable()
+
+	// Start gRPC control plane server
+	cpServer := controlplane.NewServer(cfg, routeTable, logger)
+	if err := cpServer.Start(); err != nil {
+		slog.Error("failed to start control plane server", "error", err)
+		os.Exit(1)
+	}
+	defer cpServer.Stop()
+
+	// Start control plane client (connect to peers)
+	cpClient := controlplane.NewClient(cfg, routeTable, logger)
+	go func() {
+		// Wait a bit for local setup before connecting to peers
+		time.Sleep(2 * time.Second)
+		if err := cpClient.ConnectToPeers(ctx); err != nil {
+			slog.Warn("failed to connect to some peers", "error", err)
+		}
+	}()
+	defer cpClient.Disconnect()
+
 	// Start reconciler
 	rec := reconciler.New(cfg,
 		reconciler.WithInterval(10*time.Second),
@@ -84,10 +122,14 @@ func main() {
 		}
 	}()
 
-	// TODO: Start gRPC server
-	// TODO: Start metrics/health servers
+	// Mark as ready
+	obsServer.SetReady(true)
 
-	slog.Info("daemon initialized, waiting for events...")
+	slog.Info("daemon initialized, waiting for events...",
+		"grpc_port", cfg.Security.ControlPlane.Listen.Port,
+		"metrics_port", cfg.Observability.Metrics.Listen.Port,
+		"health_port", cfg.Observability.Healthcheck.Listen.Port,
+	)
 
 	// Wait for shutdown
 	<-ctx.Done()
