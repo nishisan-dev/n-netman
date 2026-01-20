@@ -13,14 +13,16 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 
 - ✅ Criação/atualização de interfaces VXLAN e bridges Linux
 - ✅ Sincronização de FDB para peers configurados (flooding BUM)
-- ✅ CLI `nnet` com `apply` (inclui `--dry-run`), `status`, `routes`, `doctor`
+- ✅ **Troca de rotas via gRPC** (ExchangeState, AnnounceRoutes, WithdrawRoutes)
+- ✅ Instalação automática de rotas recebidas no kernel
+- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`
 - ✅ Carregamento/validação de config YAML com defaults
-- ✅ Healthchecks HTTP e endpoint de métricas disponíveis
+- ✅ Healthchecks HTTP e endpoint de métricas
 
 ### Em progresso
 
-- ⚠️ Troca real de rotas via gRPC (há conexão, mas sem RPCs)
-- ⚠️ Status de peers (no `nnet status` ainda mostra `unknown`)
+- ⚠️ Status de peers (`nnet status` mostra `unknown` até health check)
+- ⚠️ TLS para comunicação gRPC entre peers
 - ⚠️ Integração libvirt/attach de VMs
 - ⚠️ Netplan parsing e rotas conectadas/estáticas
 
@@ -393,7 +395,7 @@ nnet doctor
 
 ### Visão Geral dos Componentes
 
-Os diagramas abaixo mostram a arquitetura-alvo. Hoje, o control-plane inicia e conecta aos peers, mas a troca de rotas ainda é um stub.
+O diagrama abaixo mostra a arquitetura atual. O control-plane agora implementa troca real de rotas via gRPC.
 
 ```plantuml
 @startuml
@@ -585,26 +587,26 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 | Item | Status | Descrição |
 |------|--------|-----------|
 | **TLS no gRPC** | ❌ | Comunicação entre peers não é criptografada |
-| **Troca real de rotas** | ❌ | gRPC client conecta mas não envia/recebe rotas |
 | **Validação de PSK** | ❌ | Chaves PSK são lidas mas não validadas |
-| **Conectividade de peers** | ❌ | Status dos peers sempre mostra "unknown" |
 | **Integração libvirt** | ❌ | Attach automático de VMs não implementado |
 | **Netplan parsing** | ❌ | Rotas do netplan não são lidas automaticamente |
 
 ### Parcialmente Funcional
 | Item | Status | Descrição |
 |------|--------|-----------|
-| **VXLAN/Bridge** | ✅ | Criação funciona (requer root + teste manual) |
+| **VXLAN/Bridge** | ✅ | Criação funciona (requer root) |
 | **FDB entries** | ✅ | Sincronização de peers funciona |
-| **Reconciler** | ✅ | Loop funciona, mas sem verificação de estado real |
+| **Troca de rotas gRPC** | ✅ | Handlers implementados, rotas instaladas |
+| **Reconciler** | ✅ | Loop funciona |
 | **Métricas** | ⚠️ | Servidor inicia, mas métricas não são atualizadas |
 | **Healthcheck** | ✅ | Endpoints funcionam |
+| **Status de peers** | ⚠️ | Health check implementado, status pode demorar |
 
 ### Próximas Prioridades
-1. Implementar troca real de rotas via gRPC
-2. Adicionar TLS ao control plane
-3. Testes de integração com VMs reais
-4. Validação de PSK entre peers
+1. Adicionar TLS ao control plane
+2. Testes de integração com VMs reais em lab
+3. Validação de PSK entre peers
+4. Integração com libvirt para attach automático de VMs
 
 ---
 
