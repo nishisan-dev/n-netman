@@ -18,10 +18,12 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`
 - ✅ Carregamento/validação de config YAML com defaults
 - ✅ Healthchecks HTTP e endpoint de métricas
+- ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
+- ✅ **Estatísticas de rotas** (exported, installed, per-peer)
+- ✅ **Cleanup automático** de rotas no shutdown e quando peers caem (`flush_on_peer_down`)
 
 ### Em progresso
 
-- ⚠️ Status de peers (`nnet status` mostra `unknown` até health check)
 - ⚠️ TLS para comunicação gRPC entre peers
 - ⚠️ Integração libvirt/attach de VMs
 - ⚠️ Netplan parsing e rotas conectadas/estáticas
@@ -244,7 +246,7 @@ nnet -c /etc/n-netman/n-netman.yaml doctor
 ### Exemplo de Saída: `nnet status`
 
 ```
-🖥️  Node: host-a-01 (host-a)
+🖥️  Node: host-a (host-a)
 
 📡 VXLAN Interfaces:
 ─────────────────────────────────────────
@@ -257,10 +259,17 @@ nnet -c /etc/n-netman/n-netman.yaml doctor
 
 👥 Configured Peers:
 ─────────────────────────────────────────
-  ID          ENDPOINT      STATUS
-  ──          ────────      ──────
-  host-b-01   10.10.0.12    ⏳ unknown
-  host-c-01   10.10.0.13    ⏳ unknown
+  ID      ENDPOINT       STATUS               ROUTES
+  ──      ────────       ──────               ──────
+  host-b  192.168.56.12  🟢 healthy (5s ago)   1
+  host-c  192.168.56.13  🟢 healthy (3s ago)   1
+
+📊 Route Statistics:
+─────────────────────────────────────────
+  📤 Exported:   1 route(s) (172.16.10.0/24)
+  📥 Installed:  2 route(s) in table 100
+      • 172.16.20.0/24 via 192.168.56.12 (host-b)
+      • 172.16.30.0/24 via 192.168.56.13 (host-c)
 ```
 
 ### Daemon
