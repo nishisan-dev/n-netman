@@ -2,10 +2,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/lucas/n-netman/internal/config"
+	nlink "github.com/lucas/n-netman/internal/netlink"
+	"github.com/lucas/n-netman/internal/reconciler"
+	"github.com/lucas/n-netman/internal/routing"
 )
 
 var (
@@ -50,26 +58,128 @@ func versionCmd() *cobra.Command {
 	}
 }
 
+func loadConfig() (*config.Config, error) {
+	loader := config.NewLoader()
+	cfg, err := loader.LoadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config from %s: %w", configPath, err)
+	}
+	return cfg, nil
+}
+
 func applyCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+
+	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply configuration and reconcile state",
+		Long: `Apply reads the configuration file and reconciles the system state.
+It creates/updates VXLAN interfaces, bridges, and FDB entries as needed.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement apply logic
-			fmt.Println("Applying configuration from:", configPath)
-			fmt.Println("TODO: Implement apply")
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("📋 Loading configuration from: %s\n", configPath)
+			fmt.Printf("   Node ID: %s\n", cfg.Node.ID)
+			fmt.Printf("   VXLAN: %s (VNI %d)\n", cfg.Overlay.VXLAN.Name, cfg.Overlay.VXLAN.VNI)
+			fmt.Printf("   Bridge: %s\n", cfg.Overlay.VXLAN.Bridge)
+			fmt.Printf("   Peers: %d\n\n", len(cfg.Overlay.Peers))
+
+			if dryRun {
+				fmt.Println("🔍 Dry-run mode - no changes will be made")
+				fmt.Println("\nWould perform:")
+				fmt.Printf("  • Create bridge: %s\n", cfg.Overlay.VXLAN.Bridge)
+				fmt.Printf("  • Create VXLAN: %s (VNI %d)\n", cfg.Overlay.VXLAN.Name, cfg.Overlay.VXLAN.VNI)
+				for _, peer := range cfg.Overlay.Peers {
+					fmt.Printf("  • Add FDB entry for peer: %s (%s)\n", peer.ID, peer.Endpoint.Address)
+				}
+				return nil
+			}
+
+			fmt.Println("🔧 Applying configuration...")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			rec := reconciler.New(cfg)
+			if err := rec.RunOnce(ctx); err != nil {
+				return fmt.Errorf("reconciliation failed: %w", err)
+			}
+
+			fmt.Println("\n✅ Configuration applied successfully!")
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be done without making changes")
+
+	return cmd
 }
 
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show current overlay status",
+		Long:  `Display the current state of VXLAN interfaces, bridges, and peer connections.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement status logic
-			fmt.Println("TODO: Show status of VXLAN, bridges, peers")
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("🖥️  Node: %s (%s)\n\n", cfg.Node.ID, cfg.Node.Hostname)
+
+			// Check VXLAN status
+			vxlanMgr := nlink.NewVXLANManager()
+			bridgeMgr := nlink.NewBridgeManager()
+
+			fmt.Println("📡 VXLAN Interfaces:")
+			fmt.Println("─────────────────────────────────────────")
+
+			vxlanInfo, err := vxlanMgr.Get(cfg.Overlay.VXLAN.Name)
+			if err != nil {
+				fmt.Printf("  ❌ %s: not found\n", cfg.Overlay.VXLAN.Name)
+			} else {
+				status := "🔴 DOWN"
+				if vxlanInfo.Up {
+					status = "🟢 UP"
+				}
+				fmt.Printf("  %s %s (VNI %d, MTU %d)\n", status, vxlanInfo.Name, vxlanInfo.VNI, vxlanInfo.MTU)
+			}
+
+			fmt.Println()
+			fmt.Println("🌉 Bridges:")
+			fmt.Println("─────────────────────────────────────────")
+
+			bridgeInfo, err := bridgeMgr.Get(cfg.Overlay.VXLAN.Bridge)
+			if err != nil {
+				fmt.Printf("  ❌ %s: not found\n", cfg.Overlay.VXLAN.Bridge)
+			} else {
+				status := "🔴 DOWN"
+				if bridgeInfo.Up {
+					status = "🟢 UP"
+				}
+				fmt.Printf("  %s %s (MTU %d)\n", status, bridgeInfo.Name, bridgeInfo.MTU)
+				if len(bridgeInfo.AttachedInterfaces) > 0 {
+					fmt.Printf("      Attached: %v\n", bridgeInfo.AttachedInterfaces)
+				}
+			}
+
+			fmt.Println()
+			fmt.Println("👥 Configured Peers:")
+			fmt.Println("─────────────────────────────────────────")
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "  ID\tENDPOINT\tSTATUS")
+			fmt.Fprintln(w, "  ──\t────────\t──────")
+			for _, peer := range cfg.Overlay.Peers {
+				// TODO: Actual connectivity check
+				fmt.Fprintf(w, "  %s\t%s\t⏳ unknown\n", peer.ID, peer.Endpoint.Address)
+			}
+			w.Flush()
+
 			return nil
 		},
 	}
@@ -80,8 +190,34 @@ func routesCmd() *cobra.Command {
 		Use:   "routes",
 		Short: "List announced and learned routes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement routes logic
-			fmt.Println("TODO: Show exported and imported routes")
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			routingMgr := routing.NewManager(cfg)
+			exportRoutes := routingMgr.GetExportRoutes()
+
+			fmt.Println("📤 Exported Routes (announced to peers):")
+			fmt.Println("─────────────────────────────────────────")
+
+			if len(exportRoutes) == 0 {
+				fmt.Println("  (none configured)")
+			} else {
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "  PREFIX\tMETRIC")
+				fmt.Fprintln(w, "  ──────\t──────")
+				for _, r := range exportRoutes {
+					fmt.Fprintf(w, "  %s\t%d\n", r.Prefix, r.Metric)
+				}
+				w.Flush()
+			}
+
+			fmt.Println()
+			fmt.Println("📥 Imported Routes (learned from peers):")
+			fmt.Println("─────────────────────────────────────────")
+			fmt.Println("  (no active peer connections)")
+
 			return nil
 		},
 	}
@@ -92,9 +228,56 @@ func doctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Run diagnostics on the network and environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement doctor logic
-			fmt.Println("Running diagnostics...")
-			fmt.Println("TODO: Check netlink, bridges, VXLAN, peer connectivity")
+			fmt.Println("🩺 Running n-netman diagnostics...\n")
+
+			checks := []struct {
+				name  string
+				check func() (bool, string)
+			}{
+				{"Config file", func() (bool, string) {
+					_, err := loadConfig()
+					if err != nil {
+						return false, err.Error()
+					}
+					return true, configPath
+				}},
+				{"Root privileges", func() (bool, string) {
+					if os.Geteuid() != 0 {
+						return false, "netlink operations require root"
+					}
+					return true, "running as root"
+				}},
+				{"VXLAN support", func() (bool, string) {
+					// Check if vxlan module is loaded
+					if _, err := os.Stat("/sys/module/vxlan"); err != nil {
+						return false, "vxlan kernel module not loaded"
+					}
+					return true, "vxlan module loaded"
+				}},
+				{"Bridge support", func() (bool, string) {
+					if _, err := os.Stat("/sys/module/bridge"); err != nil {
+						return false, "bridge kernel module not loaded"
+					}
+					return true, "bridge module loaded"
+				}},
+			}
+
+			passed := 0
+			for _, c := range checks {
+				ok, msg := c.check()
+				if ok {
+					fmt.Printf("  ✅ %s: %s\n", c.name, msg)
+					passed++
+				} else {
+					fmt.Printf("  ❌ %s: %s\n", c.name, msg)
+				}
+			}
+
+			fmt.Printf("\n📊 %d/%d checks passed\n", passed, len(checks))
+
+			if passed < len(checks) {
+				return fmt.Errorf("some checks failed")
+			}
 			return nil
 		},
 	}
