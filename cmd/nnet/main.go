@@ -233,13 +233,23 @@ func statusCmd() *cobra.Command {
 
 			// Show installed route details if not too many
 			if installedCount > 0 && installedCount <= 5 {
+				// Build map of gateway IP to peer ID
+				peerByIP := make(map[string]string)
+				for _, peer := range cfg.Overlay.Peers {
+					peerByIP[peer.Endpoint.Address] = peer.ID
+				}
+
 				for _, r := range installedRoutes {
 					if r.Destination != nil {
 						gw := "-"
+						peerName := ""
 						if r.Gateway != nil {
 							gw = r.Gateway.String()
+							if name, ok := peerByIP[gw]; ok {
+								peerName = " (" + name + ")"
+							}
 						}
-						fmt.Printf("      • %s via %s\n", r.Destination.String(), gw)
+						fmt.Printf("      • %s via %s%s\n", r.Destination.String(), gw, peerName)
 					}
 				}
 			}
