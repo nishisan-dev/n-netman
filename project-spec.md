@@ -93,6 +93,8 @@ Define a identidade do host.
 
 ### 4.3. Netplan
 
+> Nota: a leitura automática do netplan ainda não está implementada.
+
 Usado para inferir interfaces e rotas underlay.
 
 | Campo                              | Descrição                         |
@@ -105,6 +107,8 @@ Usado para inferir interfaces e rotas underlay.
 ---
 
 ### 4.4. KVM / Libvirt
+
+> Nota: a integração libvirt/attach ainda está em progresso.
 
 Gerencia bridges e integração com VMs.
 
@@ -132,6 +136,8 @@ Define os túneis e a malha de conexão.
 ---
 
 ## 5. Roteamento
+
+> Nota: a troca real de rotas via gRPC ainda não está implementada.
 
 Define como rotas são anunciadas e aprendidas.
 

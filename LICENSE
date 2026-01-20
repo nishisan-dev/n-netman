@@ -1,0 +1,54 @@
+Nishi Network Manager - N-NetMan License (Non-Commercial Evaluation)
+Version 1.0
+
+Copyright (c) 2025 Nishisan
+All rights reserved.
+
+Definitions
+1. "Software" means the Nishi Network Simulator source code and associated
+   documentation in this repository.
+2. "Licensor" means the copyright holder(s) of the Software.
+3. "Non-Commercial Evaluation" means personal, educational, or internal
+   evaluation use that does not generate direct or indirect commercial
+   advantage or monetary compensation.
+4. "Commercial Use" means any use by or for a for-profit organization, any
+   use in production, any use in a commercial product or service (including
+   SaaS/hosted offerings), or any use to provide services to third parties.
+
+License Grant (Non-Commercial Evaluation Only)
+Subject to the terms of this License, the Licensor grants you a
+non-exclusive, non-transferable, non-sublicensable, revocable license to
+use, copy, modify, and distribute the Software solely for
+Non-Commercial Evaluation.
+
+Commercial License Required
+Any Commercial Use requires a separate commercial license from the
+Licensor. Without such a license, Commercial Use is prohibited.
+
+Distribution Conditions
+If you distribute the Software under this License, you must:
+1. Include this License and any third-party notices; and
+2. Not remove or alter any copyright, trademark, or attribution notices.
+
+Restrictions
+You may not:
+1. Use the Software for Commercial Use without a commercial license;
+2. Sell, sublicense, or otherwise commercially exploit the Software;
+3. Represent that the Software is licensed under an open source license.
+
+Termination
+This License terminates automatically upon any breach. Upon termination,
+you must stop all use and distribution of the Software and destroy all
+copies in your possession.
+
+Third-Party Components
+The Software may include third-party components licensed under their own
+terms. Those terms remain applicable and are not changed by this License.
+
+Disclaimer of Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

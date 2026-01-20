@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/lucas/n-netman/internal/config"
 	"github.com/lucas/n-netman/internal/controlplane"
+	nlmgr "github.com/lucas/n-netman/internal/netlink"
 	"github.com/lucas/n-netman/internal/observability"
 	"github.com/lucas/n-netman/internal/reconciler"
 )
@@ -88,11 +90,20 @@ func main() {
 	}
 	defer obsServer.Stop(context.Background())
 
+	// Initialize route manager for installing routes
+	routeMgr := nlmgr.NewRouteManager()
+
 	// Initialize route table for control plane
 	routeTable := controlplane.NewRouteTable()
 
+	// Create route installer callback
+	routeInstaller := func(routes []controlplane.Route) {
+		installReceivedRoutes(cfg, routeMgr, routes, logger)
+	}
+
 	// Start gRPC control plane server
 	cpServer := controlplane.NewServer(cfg, routeTable, logger)
+	cpServer.SetRoutesReceivedCallback(routeInstaller)
 	if err := cpServer.Start(); err != nil {
 		slog.Error("failed to start control plane server", "error", err)
 		os.Exit(1)
@@ -107,6 +118,15 @@ func main() {
 		if err := cpClient.ConnectToPeers(ctx); err != nil {
 			slog.Warn("failed to connect to some peers", "error", err)
 		}
+
+		// Perform initial state exchange
+		localRoutes := getLocalExportableRoutes(cfg, routeTable)
+		if err := cpClient.ExchangeStateWithPeers(ctx, localRoutes); err != nil {
+			slog.Warn("failed to exchange state with peers", "error", err)
+		}
+
+		// Start periodic health checks and route refresh
+		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, logger)
 	}()
 	defer cpClient.Disconnect()
 
@@ -135,4 +155,126 @@ func main() {
 	<-ctx.Done()
 
 	slog.Info("shutting down n-netman daemon")
+}
+
+// installReceivedRoutes installs routes received from peers into the kernel.
+func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, routes []controlplane.Route, logger *slog.Logger) {
+	for _, r := range routes {
+		// Parse the prefix
+		_, ipnet, err := net.ParseCIDR(r.Prefix)
+		if err != nil {
+			logger.Warn("invalid prefix from peer",
+				"prefix", r.Prefix,
+				"peer", r.PeerID,
+				"error", err,
+			)
+			continue
+		}
+
+		// Parse next-hop
+		gw := net.ParseIP(r.NextHop)
+		if gw == nil {
+			logger.Warn("invalid next-hop from peer",
+				"next_hop", r.NextHop,
+				"peer", r.PeerID,
+			)
+			continue
+		}
+
+		// Get the routing table from config
+		table := cfg.Routing.Import.Install.Table
+
+		// Install the route
+		routeCfg := nlmgr.RouteConfig{
+			Destination: ipnet,
+			Gateway:     gw,
+			Table:       table,
+			Metric:      int(r.Metric),
+			Protocol:    nlmgr.RouteProtocolNNetMan,
+		}
+
+		if err := routeMgr.Replace(routeCfg); err != nil {
+			logger.Warn("failed to install route",
+				"prefix", r.Prefix,
+				"next_hop", r.NextHop,
+				"error", err,
+			)
+			continue
+		}
+
+		logger.Info("installed route from peer",
+			"prefix", r.Prefix,
+			"next_hop", r.NextHop,
+			"peer", r.PeerID,
+			"metric", r.Metric,
+		)
+	}
+}
+
+// getLocalExportableRoutes returns routes that should be exported to peers.
+func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.RouteTable) []controlplane.Route {
+	// Get routes marked as exportable (local routes)
+	routes := make([]controlplane.Route, 0)
+
+	// Determine next-hop (use first peer endpoint as our VTEP IP for now)
+	// In production, this should be the local overlay IP
+	// TODO: properly get local overlay IP from config or underlay interface
+
+	// Add routes from config exports
+	for _, prefix := range cfg.Routing.Export.Networks {
+		routes = append(routes, controlplane.Route{
+			Prefix:       prefix,
+			NextHop:      "", // Will be filled by routing manager based on overlay IP
+			Metric:       uint32(cfg.Routing.Export.Metric),
+			LeaseSeconds: uint32(cfg.Routing.Import.Install.RouteLeaseSeconds),
+		})
+	}
+
+	return routes
+}
+
+// runRouteRefreshLoop periodically refreshes routes with peers.
+func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, logger *slog.Logger) {
+	// Refresh interval is half the lease time
+	leaseSecs := cfg.Routing.Import.Install.RouteLeaseSeconds
+	if leaseSecs <= 0 {
+		leaseSecs = 30
+	}
+	refreshInterval := time.Duration(leaseSecs/2) * time.Second
+	if refreshInterval < 30*time.Second {
+		refreshInterval = 30 * time.Second
+	}
+
+	ticker := time.NewTicker(refreshInterval)
+	defer ticker.Stop()
+
+	healthTicker := time.NewTicker(30 * time.Second)
+	defer healthTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-healthTicker.C:
+			// Check peer health
+			if err := client.CheckPeerHealth(ctx); err != nil {
+				logger.Warn("peer health check failed", "error", err)
+			}
+
+			// Expire stale routes
+			expired := routeTable.ExpireStale()
+			if expired > 0 {
+				logger.Info("expired stale routes", "count", expired)
+			}
+
+		case <-ticker.C:
+			// Re-announce our routes to peers
+			localRoutes := getLocalExportableRoutes(cfg, routeTable)
+			if len(localRoutes) > 0 {
+				if err := client.AnnounceRoutes(ctx, localRoutes); err != nil {
+					logger.Warn("failed to re-announce routes", "error", err)
+				}
+			}
+		}
+	}
 }

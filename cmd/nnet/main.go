@@ -228,7 +228,7 @@ func doctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Run diagnostics on the network and environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("🩺 Running n-netman diagnostics...\n")
+			fmt.Println("🩺 Running n-netman diagnostics...")
 
 			checks := []struct {
 				name  string
