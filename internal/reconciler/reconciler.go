@@ -16,19 +16,19 @@ import (
 
 // Reconciler manages the reconciliation loop.
 type Reconciler struct {
-	cfg     *config.Config
-	vxlan   *nlink.VXLANManager
-	bridge  *nlink.BridgeManager
-	fdb     *nlink.FDBManager
-	route   *nlink.RouteManager
-	
+	cfg    *config.Config
+	vxlan  *nlink.VXLANManager
+	bridge *nlink.BridgeManager
+	fdb    *nlink.FDBManager
+	route  *nlink.RouteManager
+
 	interval time.Duration
 	logger   *slog.Logger
-	
-	mu       sync.RWMutex
-	running  bool
-	lastErr  error
-	lastRun  time.Time
+
+	mu      sync.RWMutex
+	running bool
+	lastErr error
+	lastRun time.Time
 }
 
 // New creates a new Reconciler with the given configuration.
@@ -140,7 +140,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 // reconcileBridge ensures the bridge exists and is configured correctly.
 func (r *Reconciler) reconcileBridge(ctx context.Context) error {
 	bridgeName := r.cfg.Overlay.VXLAN.Bridge
-	
+
 	// Check KVM config for bridge settings
 	var bridgeCfg *config.BridgeDef
 	for i := range r.cfg.KVM.Bridges {
@@ -163,7 +163,7 @@ func (r *Reconciler) reconcileBridge(ctx context.Context) error {
 		}
 
 		r.logger.Debug("ensuring managed bridge", "name", bridgeName, "mtu", mtu, "stp", stp)
-		
+
 		if err := r.bridge.Create(nlink.BridgeConfig{
 			Name: bridgeName,
 			STP:  stp,
@@ -174,7 +174,7 @@ func (r *Reconciler) reconcileBridge(ctx context.Context) error {
 	} else if !r.bridge.Exists(bridgeName) {
 		// Bridge doesn't exist and isn't managed - create with defaults
 		r.logger.Debug("creating unmanaged bridge", "name", bridgeName)
-		
+
 		if err := r.bridge.Create(nlink.BridgeConfig{
 			Name: bridgeName,
 			MTU:  mtu,
@@ -218,9 +218,17 @@ func (r *Reconciler) reconcileVXLAN(ctx context.Context) error {
 }
 
 // reconcileFDB syncs FDB entries with configured peers.
+// Note: When VXLAN learning is enabled, the kernel manages FDB automatically
+// and manual FDB entries are not needed.
 func (r *Reconciler) reconcileFDB(ctx context.Context) error {
 	vxlanName := r.cfg.Overlay.VXLAN.Name
 	peers := r.cfg.Overlay.Peers
+
+	// Skip FDB sync when learning is enabled - kernel manages it automatically
+	if r.cfg.Overlay.VXLAN.Learning {
+		r.logger.Debug("skipping fdb sync, vxlan learning is enabled", "vxlan", vxlanName)
+		return nil
+	}
 
 	// Build list of peer IPs
 	var peerIPs []net.IP
@@ -254,17 +262,17 @@ func (r *Reconciler) Status() ReconcilerStatus {
 	defer r.mu.RUnlock()
 
 	return ReconcilerStatus{
-		Running:  r.running,
-		LastRun:  r.lastRun,
-		LastErr:  r.lastErr,
+		Running: r.running,
+		LastRun: r.lastRun,
+		LastErr: r.lastErr,
 	}
 }
 
 // ReconcilerStatus contains the current status of the reconciler.
 type ReconcilerStatus struct {
-	Running  bool
-	LastRun  time.Time
-	LastErr  error
+	Running bool
+	LastRun time.Time
+	LastErr error
 }
 
 // RunOnce performs a single reconciliation without starting the loop.
