@@ -26,6 +26,7 @@ func NewManager(cfg *config.Config) *Manager {
 }
 
 // GetExportRoutes returns the routes that should be exported according to policy.
+// Currently, it only includes explicit config networks.
 func (m *Manager) GetExportRoutes() []controlplane.Route {
 	m.mu.RLock()
 	if len(m.exportedRoutes) > 0 {

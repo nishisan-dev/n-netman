@@ -111,7 +111,8 @@ func (rt *RouteTable) ExpireStale() int {
 	return count
 }
 
-// Server is the gRPC server for receiving route announcements.
+// Server is the gRPC server for control-plane traffic.
+// Note: RPC handlers are not implemented yet; it only starts the listener.
 type Server struct {
 	cfg        *config.Config
 	routeTable *RouteTable
@@ -198,7 +199,8 @@ func (s *Server) Stop() {
 	s.logger.Info("control plane server stopped")
 }
 
-// Client manages connections to peer control plane servers.
+// Client manages outbound connections to peer control-plane servers.
+// It does not exchange routes yet; AnnounceRoutes is a stub.
 type Client struct {
 	cfg        *config.Config
 	routeTable *RouteTable

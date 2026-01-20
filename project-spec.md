@@ -6,12 +6,20 @@ O **n-netman** é um agente leve para criação e gerenciamento de **overlays VX
 
 O objetivo é permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e simples**, integrando-se ao **netplan** para a camada underlay e ao **libvirt** para a camada de virtualização.
 
-Ele elimina a necessidade de soluções complexas como **OVS**, oferecendo um **control-plane minimalista**, com suporte a:
+Ele elimina a necessidade de soluções complexas como **OVS**, oferecendo um **control-plane minimalista**.
 
-* Criação automática de VXLAN e bridges Linux
-* Descoberta e conexão entre nós (peers)
-* Anúncio e aprendizado de rotas
-* Políticas de topologia e trânsito entre nós
+### Estado atual (implementado)
+
+* Criação/atualização de VXLAN e bridges Linux
+* Sincronização de FDB para peers configurados
+* CLI para `apply`, `status`, `routes` (exportadas do config) e `doctor`
+* Healthchecks HTTP e endpoint de métricas disponíveis
+
+### Em progresso
+
+* Troca real de rotas via gRPC
+* Status de peers e health do control-plane
+* Leitura de netplan e integração libvirt
 
 ---
 
@@ -34,23 +42,23 @@ Ele elimina a necessidade de soluções complexas como **OVS**, oferecendo um **
 
 O daemon:
 
-* Lê o YAML do n-netman
-* Descobre e seleciona interfaces underlay
+* Lê o YAML do n-netman e valida a configuração
 * Cria bridges Linux e interfaces VXLAN
-* Estabelece conexões VXLAN entre peers
-* Anuncia e aprende rotas
+* Sincroniza entradas FDB para peers configurados
+* Inicia healthchecks e endpoint de métricas
+* Sobe o control-plane gRPC e tenta conectar aos peers
 * Reconcilia o estado continuamente
 
 ### 3.2. CLI
 
 O CLI interage com o daemon e executa comandos de suporte.
 
-| Comando       | Função                                           |
-| ------------- | ------------------------------------------------ |
-| `nnet apply`  | Aplica a configuração YAML e reconcilia o estado |
-| `nnet status` | Mostra peers, VXLAN, bridges e estado atual      |
-| `nnet routes` | Lista rotas anunciadas e aprendidas              |
-| `nnet doctor` | Executa diagnóstico da rede e do ambiente        |
+| Comando       | Função                                                        |
+| ------------- | ------------------------------------------------------------- |
+| `nnet apply`  | Aplica a configuração YAML e reconcilia o estado              |
+| `nnet status` | Mostra VXLAN, bridges e peers configurados (status `unknown`) |
+| `nnet routes` | Lista rotas exportadas a partir do config                      |
+| `nnet doctor` | Executa diagnóstico da rede e do ambiente                     |
 
 ---
 
@@ -203,4 +211,3 @@ Permite acompanhamento e depuração.
 * Compatibilidade com netplan e libvirt
 * Controle explícito de topologia e trânsito
 * Clareza de arquitetura e debugging
-

@@ -9,14 +9,20 @@
 
 Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e simples**, eliminando a necessidade de soluções complexas como OVS.
 
-### Principais Funcionalidades
+### O que já funciona
 
-- ✅ Criação automática de interfaces VXLAN e bridges Linux
-- ✅ Descoberta e conexão entre nós (peers)
-- ✅ Anúncio e aprendizado de rotas entre peers
-- ✅ Políticas de topologia e trânsito
-- ✅ Métricas Prometheus e healthchecks
-- ✅ Integração opcional com libvirt
+- ✅ Criação/atualização de interfaces VXLAN e bridges Linux
+- ✅ Sincronização de FDB para peers configurados (flooding BUM)
+- ✅ CLI `nnet` com `apply` (inclui `--dry-run`), `status`, `routes`, `doctor`
+- ✅ Carregamento/validação de config YAML com defaults
+- ✅ Healthchecks HTTP e endpoint de métricas disponíveis
+
+### Em progresso
+
+- ⚠️ Troca real de rotas via gRPC (há conexão, mas sem RPCs)
+- ⚠️ Status de peers (no `nnet status` ainda mostra `unknown`)
+- ⚠️ Integração libvirt/attach de VMs
+- ⚠️ Netplan parsing e rotas conectadas/estáticas
 
 ---
 
@@ -251,8 +257,8 @@ nnet -c /etc/n-netman/n-netman.yaml doctor
 ─────────────────────────────────────────
   ID          ENDPOINT      STATUS
   ──          ────────      ──────
-  host-b-01   10.10.0.12    🟢 healthy
-  host-c-01   10.10.0.13    🟢 healthy
+  host-b-01   10.10.0.12    ⏳ unknown
+  host-c-01   10.10.0.13    ⏳ unknown
 ```
 
 ### Daemon
@@ -298,7 +304,7 @@ sudo systemctl status n-netman
 
 ### Métricas Prometheus
 
-Disponíveis em `http://127.0.0.1:9109/metrics`:
+Disponíveis em `http://127.0.0.1:9109/metrics`. Nota: os contadores ainda não são atualizados pelo reconciler/control-plane.
 
 | Métrica | Descrição |
 |---------|-----------|
@@ -323,6 +329,19 @@ curl http://127.0.0.1:9110/readyz
 # Health geral
 curl http://127.0.0.1:9110/healthz
 ```
+
+---
+
+## 🧩 Componentes Internos (Go)
+
+- `cmd/nnetd`: daemon (carrega config, inicia observabilidade e reconciler)
+- `cmd/nnet`: CLI para aplicar config e inspecionar estado
+- `internal/config`: structs, defaults e validação do YAML
+- `internal/reconciler`: loop que garante bridge/VXLAN/FDB conforme config
+- `internal/netlink`: wrappers de bridge/VXLAN/FDB/rotas via netlink
+- `internal/controlplane`: servidor/cliente gRPC (troca de rotas ainda stub)
+- `internal/routing`: políticas de export/import (somente redes do config)
+- `internal/observability`: métricas Prometheus e healthchecks HTTP
 
 ---
 
@@ -373,6 +392,8 @@ nnet doctor
 ## 🏗️ Arquitetura
 
 ### Visão Geral dos Componentes
+
+Os diagramas abaixo mostram a arquitetura-alvo. Hoje, o control-plane inicia e conecta aos peers, mas a troca de rotas ainda é um stub.
 
 ```plantuml
 @startuml
