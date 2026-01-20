@@ -302,6 +302,89 @@ sudo systemctl status n-netman
 
 ---
 
+## 🧪 Lab Testing (Vagrant)
+
+O projeto inclui um `Vagrantfile` para testar a troca de rotas em um ambiente com 3 VMs.
+
+### Topologia do Lab
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Underlay: 192.168.56.0/24                  │
+├───────────────────┬──────────────────┬──────────────────────┤
+│     host-a        │     host-b       │      host-c          │
+│  192.168.56.11    │  192.168.56.12   │   192.168.56.13      │
+│                   │                  │                      │
+│ Overlay:          │ Overlay:         │ Overlay:             │
+│ 172.16.10.0/24    │ 172.16.20.0/24   │ 172.16.30.0/24       │
+└───────────────────┴──────────────────┴──────────────────────┘
+```
+
+### Requisitos
+
+- [Vagrant](https://www.vagrantup.com/) instalado
+- [VirtualBox](https://www.virtualbox.org/) instalado
+- ~2GB de RAM livre
+
+### Subir o Lab
+
+```bash
+# Subir as 3 VMs (primeira vez demora ~5min)
+vagrant up
+
+# Ver status
+vagrant status
+```
+
+### Testar a Troca de Rotas
+
+```bash
+# Terminal 1: host-a
+vagrant ssh host-a
+sudo nnetd -config /etc/n-netman/n-netman.yaml
+
+# Terminal 2: host-b
+vagrant ssh host-b
+sudo nnetd -config /etc/n-netman/n-netman.yaml
+
+# Terminal 3: host-c
+vagrant ssh host-c
+sudo nnetd -config /etc/n-netman/n-netman.yaml
+```
+
+Aguarde ~5 segundos e verifique as rotas aprendidas:
+
+```bash
+# Em qualquer VM
+ip route show table 100
+
+# Saída esperada (ex: em host-a):
+# 172.16.20.0/24 via <next-hop> dev br-nnet-100 proto 99
+# 172.16.30.0/24 via <next-hop> dev br-nnet-100 proto 99
+```
+
+### Script de Validação
+
+```bash
+# Em cada VM, rodar o script de teste
+./n-netman/scripts/lab-test.sh
+```
+
+### Comandos Úteis
+
+```bash
+# Destruir VMs
+vagrant destroy -f
+
+# Recriar uma VM específica
+vagrant destroy host-a -f && vagrant up host-a
+
+# SSH em uma VM
+vagrant ssh host-b
+```
+
+---
+
 ## 📊 Observabilidade
 
 ### Métricas Prometheus
