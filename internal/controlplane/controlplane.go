@@ -772,10 +772,13 @@ func (c *Client) CheckPeerHealth(ctx context.Context) ([]string, error) {
 		c.mu.Lock()
 		if p, ok := c.conns[pc.peerID]; ok {
 			if err != nil {
-				if status.Code(err) == codes.Unavailable {
+				// Treat various connection errors as peer down
+				code := status.Code(err)
+				if code == codes.Unavailable || code == codes.DeadlineExceeded ||
+					code == codes.Canceled || code == codes.Unknown {
 					wasHealthy := p.healthy
 					p.healthy = false
-					c.logger.Warn("peer unreachable", "peer_id", pc.peerID, "error", err)
+					c.logger.Warn("peer unreachable", "peer_id", pc.peerID, "error", err, "grpc_code", code.String())
 					if wasHealthy {
 						newlyUnhealthy = append(newlyUnhealthy, pc.peerID)
 					}
