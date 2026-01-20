@@ -424,7 +424,7 @@ curl http://127.0.0.1:9110/healthz
 - `internal/config`: structs, defaults e validação do YAML
 - `internal/reconciler`: loop que garante bridge/VXLAN/FDB conforme config
 - `internal/netlink`: wrappers de bridge/VXLAN/FDB/rotas via netlink
-- `internal/controlplane`: servidor/cliente gRPC (troca de rotas ainda stub)
+- `internal/controlplane`: servidor/cliente gRPC com ExchangeState/Announce/Withdraw
 - `internal/routing`: políticas de export/import (somente redes do config)
 - `internal/observability`: métricas Prometheus e healthchecks HTTP
 

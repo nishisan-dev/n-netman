@@ -12,14 +12,15 @@ Ele elimina a necessidade de soluções complexas como **OVS**, oferecendo um **
 
 * Criação/atualização de VXLAN e bridges Linux
 * Sincronização de FDB para peers configurados
+* Troca de rotas via gRPC (ExchangeState/Announce/Withdraw) + instalação no kernel
 * CLI para `apply`, `status`, `routes` (exportadas do config) e `doctor`
 * Healthchecks HTTP e endpoint de métricas disponíveis
 
 ### Em progresso
 
-* Troca real de rotas via gRPC
 * Status de peers e health do control-plane
 * Leitura de netplan e integração libvirt
+* TLS para comunicação gRPC entre peers
 
 ---
 
@@ -46,7 +47,7 @@ O daemon:
 * Cria bridges Linux e interfaces VXLAN
 * Sincroniza entradas FDB para peers configurados
 * Inicia healthchecks e endpoint de métricas
-* Sobe o control-plane gRPC e tenta conectar aos peers
+* Sobe o control-plane gRPC, troca rotas e instala rotas recebidas
 * Reconcilia o estado continuamente
 
 ### 3.2. CLI
@@ -137,7 +138,7 @@ Define os túneis e a malha de conexão.
 
 ## 5. Roteamento
 
-> Nota: a troca real de rotas via gRPC ainda não está implementada.
+> Nota: a troca de rotas é via gRPC, mas ainda sem TLS.
 
 Define como rotas são anunciadas e aprendidas.
 
