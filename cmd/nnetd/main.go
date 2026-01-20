@@ -112,6 +112,8 @@ func main() {
 
 	// Start control plane client (connect to peers)
 	cpClient := controlplane.NewClient(cfg, routeTable, logger)
+	// Set client as status provider for /status endpoint
+	obsServer.SetStatusProvider(cpClient)
 	go func() {
 		// Wait a bit for local setup before connecting to peers
 		time.Sleep(2 * time.Second)

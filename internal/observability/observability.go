@@ -3,6 +3,7 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,36 @@ import (
 
 	"github.com/lucas/n-netman/internal/config"
 )
+
+// PeerStatus represents the status of a single peer.
+type PeerStatus struct {
+	ID       string `json:"id"`
+	Endpoint string `json:"endpoint"`
+	Status   string `json:"status"`
+	LastSeen string `json:"last_seen,omitempty"`
+	Routes   int    `json:"routes"`
+}
+
+// NodeStatus represents the overall status of the daemon.
+type NodeStatus struct {
+	NodeID string                `json:"node_id"`
+	Uptime string                `json:"uptime"`
+	Peers  map[string]PeerStatus `json:"peers"`
+	Routes RouteStats            `json:"routes"`
+}
+
+// RouteStats contains route statistics.
+type RouteStats struct {
+	Exported  int `json:"exported"`
+	Installed int `json:"installed"`
+}
+
+// StatusProvider is an interface for getting daemon status.
+// This is implemented by the controlplane.Client.
+type StatusProvider interface {
+	GetPeerStatuses() map[string]PeerStatus
+	GetRouteStats() RouteStats
+}
 
 // Metrics holds all Prometheus metrics for n-netman.
 type Metrics struct {
@@ -142,10 +173,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 
 // Server provides HTTP endpoints for metrics and health checks.
 type Server struct {
-	cfg           *config.Config
-	logger        *slog.Logger
-	metricsServer *http.Server
-	healthServer  *http.Server
+	cfg            *config.Config
+	logger         *slog.Logger
+	metricsServer  *http.Server
+	healthServer   *http.Server
+	statusProvider StatusProvider
 
 	mu        sync.RWMutex
 	healthy   bool
@@ -162,6 +194,13 @@ func NewServer(cfg *config.Config, logger *slog.Logger) *Server {
 		ready:     false,
 		startTime: time.Now(),
 	}
+}
+
+// SetStatusProvider sets the status provider for the /status endpoint.
+func (s *Server) SetStatusProvider(provider StatusProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statusProvider = provider
 }
 
 // Start starts the metrics and health check servers.
@@ -217,6 +256,7 @@ func (s *Server) startHealthServer() error {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/livez", s.handleLive)
+	mux.HandleFunc("/status", s.handleStatus)
 
 	s.healthServer = &http.Server{
 		Addr:    addr,
@@ -265,6 +305,51 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(s.startTime).Seconds()
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `{"status": "alive", "uptime_seconds": %.0f}`+"\n", uptime)
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	provider := s.statusProvider
+	s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Build status response
+	status := NodeStatus{
+		NodeID: s.cfg.Node.ID,
+		Uptime: time.Since(s.startTime).Round(time.Second).String(),
+		Peers:  make(map[string]PeerStatus),
+		Routes: RouteStats{},
+	}
+
+	// Get peer statuses from provider if available
+	if provider != nil {
+		status.Peers = provider.GetPeerStatuses()
+		status.Routes = provider.GetRouteStats()
+	} else {
+		// Fallback: show configured peers with unknown status
+		for _, peer := range s.cfg.Overlay.Peers {
+			status.Peers[peer.ID] = PeerStatus{
+				ID:       peer.ID,
+				Endpoint: peer.Endpoint.Address,
+				Status:   "unknown",
+				Routes:   0,
+			}
+		}
+		// Count exported routes from config
+		status.Routes.Exported = len(s.cfg.Routing.Export.Networks)
+	}
+
+	data, err := json.Marshal(status)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error": "%s"}`, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+	w.Write([]byte("\n"))
 }
 
 // SetHealthy sets the health status.

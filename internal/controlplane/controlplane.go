@@ -17,6 +17,7 @@ import (
 
 	pb "github.com/lucas/n-netman/api/v1"
 	"github.com/lucas/n-netman/internal/config"
+	"github.com/lucas/n-netman/internal/observability"
 )
 
 // Route represents a network route for exchange between peers.
@@ -767,4 +768,67 @@ func (c *Client) CheckPeerHealth(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// GetPeerStatuses returns the status of all peers.
+// This implements the observability.StatusProvider interface.
+func (c *Client) GetPeerStatuses() map[string]observability.PeerStatus {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make(map[string]observability.PeerStatus)
+
+	// Start with configured peers
+	for _, peer := range c.cfg.Overlay.Peers {
+		ps := observability.PeerStatus{
+			ID:       peer.ID,
+			Endpoint: peer.Endpoint.Address,
+			Status:   "disconnected",
+			Routes:   0,
+		}
+
+		// Update with actual connection status
+		if pc, ok := c.conns[peer.ID]; ok {
+			if pc.healthy {
+				ps.Status = "healthy"
+				if !pc.lastSeen.IsZero() {
+					ps.LastSeen = time.Since(pc.lastSeen).Round(time.Second).String()
+				}
+			} else if pc.conn != nil {
+				ps.Status = "unhealthy"
+			}
+		}
+
+		result[peer.ID] = ps
+	}
+
+	// Count routes per peer
+	for _, route := range c.routeTable.All() {
+		if route.PeerID != "" {
+			if ps, ok := result[route.PeerID]; ok {
+				ps.Routes++
+				result[route.PeerID] = ps
+			}
+		}
+	}
+
+	return result
+}
+
+// GetRouteStats returns route statistics.
+// This implements the observability.StatusProvider interface.
+func (c *Client) GetRouteStats() observability.RouteStats {
+	stats := observability.RouteStats{}
+
+	// Exported routes from config
+	stats.Exported = len(c.cfg.Routing.Export.Networks)
+
+	// Installed routes (routes received from peers)
+	for _, route := range c.routeTable.All() {
+		if route.PeerID != "" {
+			stats.Installed++
+		}
+	}
+
+	return stats
 }

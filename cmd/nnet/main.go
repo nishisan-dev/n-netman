@@ -3,7 +3,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/lucas/n-netman/internal/config"
 	nlink "github.com/lucas/n-netman/internal/netlink"
+	"github.com/lucas/n-netman/internal/observability"
 	"github.com/lucas/n-netman/internal/reconciler"
 	"github.com/lucas/n-netman/internal/routing"
 )
@@ -168,16 +172,37 @@ func statusCmd() *cobra.Command {
 				}
 			}
 
+			// Try to get live status from daemon
+			daemonStatus := getDaemonStatus(cfg)
+
 			fmt.Println()
 			fmt.Println("👥 Configured Peers:")
 			fmt.Println("─────────────────────────────────────────")
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "  ID\tENDPOINT\tSTATUS")
-			fmt.Fprintln(w, "  ──\t────────\t──────")
-			for _, peer := range cfg.Overlay.Peers {
-				// TODO: Actual connectivity check
-				fmt.Fprintf(w, "  %s\t%s\t⏳ unknown\n", peer.ID, peer.Endpoint.Address)
+			fmt.Fprintln(w, "  ID\tENDPOINT\tSTATUS\tROUTES")
+			fmt.Fprintln(w, "  ──\t────────\t──────\t──────")
+
+			if daemonStatus != nil {
+				// Use live status from daemon
+				for _, peer := range cfg.Overlay.Peers {
+					ps, ok := daemonStatus.Peers[peer.ID]
+					if ok {
+						statusIcon := getStatusIcon(ps.Status)
+						lastSeen := ""
+						if ps.LastSeen != "" {
+							lastSeen = " (" + ps.LastSeen + " ago)"
+						}
+						fmt.Fprintf(w, "  %s\t%s\t%s %s%s\t%d\n", ps.ID, ps.Endpoint, statusIcon, ps.Status, lastSeen, ps.Routes)
+					} else {
+						fmt.Fprintf(w, "  %s\t%s\t⏳ unknown\t-\n", peer.ID, peer.Endpoint.Address)
+					}
+				}
+			} else {
+				// Fallback: daemon not running
+				for _, peer := range cfg.Overlay.Peers {
+					fmt.Fprintf(w, "  %s\t%s\t⚠️  daemon offline\t-\n", peer.ID, peer.Endpoint.Address)
+				}
 			}
 			w.Flush()
 
@@ -234,6 +259,52 @@ func formatPrefixList(prefixes []string) string {
 		result += ", " + prefixes[i]
 	}
 	return result
+}
+
+// getDaemonStatus fetches status from the nnetd daemon's /status endpoint.
+func getDaemonStatus(cfg *config.Config) *observability.NodeStatus {
+	port := cfg.Observability.Healthcheck.Listen.Port
+	if port == 0 {
+		port = 9110 // default
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/status", port)
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil // daemon not reachable
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	var status observability.NodeStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil
+	}
+
+	return &status
+}
+
+// getStatusIcon returns an emoji icon for peer status.
+func getStatusIcon(status string) string {
+	switch status {
+	case "healthy":
+		return "🟢"
+	case "unhealthy":
+		return "🟡"
+	case "disconnected":
+		return "🔴"
+	default:
+		return "⏳"
+	}
 }
 
 func routesCmd() *cobra.Command {
