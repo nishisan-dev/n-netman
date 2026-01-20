@@ -114,19 +114,20 @@ func (rt *RouteTable) All() []Route {
 }
 
 // ExpireStale removes routes that have exceeded their lease.
-func (rt *RouteTable) ExpireStale() int {
+// Returns the list of expired routes so caller can remove them from kernel.
+func (rt *RouteTable) ExpireStale() []Route {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
 	now := time.Now()
-	count := 0
+	var expired []Route
 	for prefix, r := range rt.routes {
 		if !r.ExpiresAt.IsZero() && r.ExpiresAt.Before(now) {
+			expired = append(expired, r)
 			delete(rt.routes, prefix)
-			count++
 		}
 	}
-	return count
+	return expired
 }
 
 // Server is the gRPC server implementing the NNetMan service.

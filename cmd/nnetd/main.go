@@ -370,10 +370,31 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 				}
 			}
 
-			// Expire stale routes
-			expired := routeTable.ExpireStale()
-			if expired > 0 {
-				logger.Info("expired stale routes", "count", expired)
+			// Expire stale routes and remove from kernel
+			expiredRoutes := routeTable.ExpireStale()
+			for _, r := range expiredRoutes {
+				_, ipnet, err := net.ParseCIDR(r.Prefix)
+				if err != nil {
+					continue
+				}
+				if err := routeMgr.Delete(nlmgr.RouteConfig{
+					Destination: ipnet,
+					Table:       table,
+				}); err != nil {
+					logger.Warn("failed to delete expired route",
+						"prefix", r.Prefix,
+						"peer", r.PeerID,
+						"error", err,
+					)
+				} else {
+					logger.Info("removed expired route",
+						"prefix", r.Prefix,
+						"peer", r.PeerID,
+					)
+				}
+			}
+			if len(expiredRoutes) > 0 {
+				logger.Info("expired stale routes", "count", len(expiredRoutes))
 			}
 
 		case <-ticker.C:
