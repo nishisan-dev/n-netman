@@ -128,7 +128,7 @@ func main() {
 		}
 
 		// Start periodic health checks and route refresh
-		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, logger)
+		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, routeMgr, logger)
 	}()
 	defer cpClient.Disconnect()
 
@@ -157,6 +157,23 @@ func main() {
 	<-ctx.Done()
 
 	slog.Info("shutting down n-netman daemon")
+
+	// Cleanup: flush all routes installed by n-netman
+	table := cfg.Routing.Import.Install.Table
+	if table == 0 {
+		table = 100
+	}
+	slog.Info("flushing installed routes", "table", table, "protocol", nlmgr.RouteProtocolNNetMan)
+	if err := routeMgr.FlushByProtocol(table, nlmgr.RouteProtocolNNetMan); err != nil {
+		slog.Warn("failed to flush routes on shutdown", "error", err)
+	} else {
+		slog.Info("routes flushed successfully")
+	}
+
+	// Cleanup: delete VXLAN interface (optional, can be configured)
+	// Note: This is commented out by default as the VXLAN might be shared
+	// vxlanMgr := nlmgr.NewVXLANManager()
+	// vxlanMgr.Delete(cfg.Overlay.VXLAN.Name)
 }
 
 // installReceivedRoutes installs routes received from peers into the kernel.
@@ -283,7 +300,7 @@ func detectLocalIP(cfg *config.Config) string {
 }
 
 // runRouteRefreshLoop periodically refreshes routes with peers.
-func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, logger *slog.Logger) {
+func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, routeMgr *nlmgr.RouteManager, logger *slog.Logger) {
 	// Refresh interval is half the lease time
 	leaseSecs := cfg.Routing.Import.Install.RouteLeaseSeconds
 	if leaseSecs <= 0 {
@@ -300,14 +317,57 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 	healthTicker := time.NewTicker(30 * time.Second)
 	defer healthTicker.Stop()
 
+	// Get table for route cleanup
+	table := cfg.Routing.Import.Install.Table
+	if table == 0 {
+		table = 100
+	}
+	flushOnPeerDown := cfg.Routing.Import.Install.FlushOnPeerDown
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-healthTicker.C:
-			// Check peer health
-			if err := client.CheckPeerHealth(ctx); err != nil {
+			// Check peer health and get newly unhealthy peers
+			downPeers, err := client.CheckPeerHealth(ctx)
+			if err != nil {
 				logger.Warn("peer health check failed", "error", err)
+			}
+
+			// Remove routes from peers that just went down
+			if len(downPeers) > 0 && flushOnPeerDown {
+				for _, peerID := range downPeers {
+					// Get routes for this peer from route table
+					peerRoutes := routeTable.GetByPeer(peerID)
+					for _, r := range peerRoutes {
+						_, ipnet, err := net.ParseCIDR(r.Prefix)
+						if err != nil {
+							continue
+						}
+						if err := routeMgr.Delete(nlmgr.RouteConfig{
+							Destination: ipnet,
+							Table:       table,
+						}); err != nil {
+							logger.Warn("failed to delete route for down peer",
+								"prefix", r.Prefix,
+								"peer", peerID,
+								"error", err,
+							)
+						} else {
+							logger.Info("removed route for down peer",
+								"prefix", r.Prefix,
+								"peer", peerID,
+							)
+						}
+					}
+					// Remove from route table
+					removed := routeTable.RemoveByPeer(peerID)
+					logger.Info("cleaned up routes for down peer",
+						"peer_id", peerID,
+						"routes_removed", removed,
+					)
+				}
 			}
 
 			// Expire stale routes

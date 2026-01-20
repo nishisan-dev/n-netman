@@ -79,6 +79,20 @@ func (rt *RouteTable) RemoveByPeer(peerID string) int {
 	return count
 }
 
+// GetByPeer returns all routes from a specific peer.
+func (rt *RouteTable) GetByPeer(peerID string) []Route {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
+	var routes []Route
+	for _, r := range rt.routes {
+		if r.PeerID == peerID {
+			routes = append(routes, r)
+		}
+	}
+	return routes
+}
+
 // Get returns a route by prefix.
 func (rt *RouteTable) Get(prefix string) (Route, bool) {
 	rt.mu.RLock()
@@ -730,7 +744,8 @@ func (c *Client) IsHealthy() bool {
 }
 
 // CheckPeerHealth performs health checks on all peers.
-func (c *Client) CheckPeerHealth(ctx context.Context) error {
+// Returns a list of peer IDs that became unhealthy during this check.
+func (c *Client) CheckPeerHealth(ctx context.Context) ([]string, error) {
 	c.mu.RLock()
 	peers := make([]*peerConn, 0, len(c.conns))
 	for _, pc := range c.conns {
@@ -739,6 +754,8 @@ func (c *Client) CheckPeerHealth(ctx context.Context) error {
 		}
 	}
 	c.mu.RUnlock()
+
+	var newlyUnhealthy []string
 
 	for _, pc := range peers {
 		// Try a simple state exchange as health check
@@ -756,8 +773,12 @@ func (c *Client) CheckPeerHealth(ctx context.Context) error {
 		if p, ok := c.conns[pc.peerID]; ok {
 			if err != nil {
 				if status.Code(err) == codes.Unavailable {
+					wasHealthy := p.healthy
 					p.healthy = false
 					c.logger.Warn("peer unreachable", "peer_id", pc.peerID, "error", err)
+					if wasHealthy {
+						newlyUnhealthy = append(newlyUnhealthy, pc.peerID)
+					}
 				}
 			} else {
 				p.healthy = true
@@ -767,7 +788,7 @@ func (c *Client) CheckPeerHealth(ctx context.Context) error {
 		c.mu.Unlock()
 	}
 
-	return nil
+	return newlyUnhealthy, nil
 }
 
 // GetPeerStatuses returns the status of all peers.
