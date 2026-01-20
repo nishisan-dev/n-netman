@@ -1,0 +1,167 @@
+# /etc/n-netman/n-netman.yaml
+
+version: 1
+
+node:
+  id: "curitiba-a-01"
+  hostname: "host-a"
+  tags:
+    - "lab"
+    - "kvm"
+
+# Integração com netplan (somente leitura)
+netplan:
+  enabled: true
+  config_paths:
+    - "/etc/netplan"
+  # Se vazio, o agente tenta inferir automaticamente a melhor interface/addr
+  underlay:
+    prefer_interfaces:
+      - "ens3"
+      - "eno1"
+    prefer_address_families:
+      - "ipv4"
+      - "ipv6"
+
+# Integração com KVM/libvirt (se virsh/libvirtd estiverem presentes)
+kvm:
+  enabled: true
+  provider: "libvirt"
+  libvirt:
+    uri: "qemu:///system"
+    # se mode=linux-bridge, não cria network libvirt, só usa bridge do linux
+    # se mode=libvirt-network, cria/define uma network libvirt apontando pra bridge do linux
+    mode: "linux-bridge"  # linux-bridge | libvirt-network
+    network:
+      name: "nnet-vni100"
+      autostart: true
+      # forward_mode só é aplicado quando mode=libvirt-network
+      forward_mode: "bridge"  # bridge | nat | route (o comum aqui é bridge)
+  bridges:
+    # Uma bridge por VNI (ou por “segmento”)
+    - name: "br-nnet-100"
+      stp: false
+      mtu: 1450
+      # Em linux-bridge: o agente cria e gerencia
+      # Em libvirt-network: o agente cria a bridge e aponta a network libvirt pra ela
+      manage: true
+
+  # Opcional: anexar VMs automaticamente (MVP pode ignorar)
+  attach:
+    enabled: false
+    # strategy: by-name | by-tag | regex
+    strategy: "by-name"
+    targets:
+      - vm: "vm-a1"
+        bridge: "br-nnet-100"
+        model: "virtio"
+      - vm: "vm-a2"
+        bridge: "br-nnet-100"
+        model: "virtio"
+
+overlay:
+  vxlan:
+    vni: 100
+    name: "vxlan100"
+    dstport: 4789
+    learning: true
+    # ttl: 16
+    # tos: inherit
+    mtu: 1450
+    # Bridge do segmento VXLAN
+    bridge: "br-nnet-100"
+
+  # Peers L3 (underlay endpoints) para formar o overlay
+  # O agente usa isso pra criar as entradas necessárias (FDB/peer endpoints)
+  peers:
+    - id: "curitiba-b-01"
+      endpoint:
+        address: "10.10.0.12"
+        # opcional: força uma interface de saída pro underlay
+        via_interface: "ens3"
+      auth:
+        mode: "psk"
+        psk_ref: "file:/etc/n-netman/psk/curitiba-b-01.key"
+      health:
+        keepalive_interval_ms: 1500
+        dead_after_ms: 6000
+
+    - id: "curitiba-c-01"
+      endpoint:
+        address: "10.10.0.13"
+      auth:
+        mode: "psk"
+        psk_ref: "file:/etc/n-netman/psk/curitiba-c-01.key"
+
+routing:
+  enabled: true
+
+  # Exportação de rotas (o que este nó anuncia para os outros)
+  export:
+    export_all: false
+    networks:
+      - "172.16.10.0/24"
+      - "172.16.20.0/24"
+      - "2001:db8:10::/64"
+    include_connected: true
+    include_netplan_static: true
+    metric: 100
+    # tags/policies futuras:
+    # communities: ["lab", "prod-like"]
+
+  # Importação de rotas (o que este nó aceita aprender)
+  import:
+    accept_all: false
+    allow:
+      - "172.16.0.0/16"
+      - "2001:db8::/32"
+    deny:
+      - "0.0.0.0/0"
+      - "::/0"
+    install:
+      table: 100
+      replace_existing: true
+      flush_on_peer_down: true
+      route_lease_seconds: 30
+
+topology:
+  # Não use "fullmesh" no config, fica ambíguo.
+  # "direct-preferred": tenta peering direto quando possível, mas pode aceitar caminhos via outros nós (relay fallback)
+  mode: "direct-preferred"     # direct-preferred | full-mesh | hub-spoke | static
+  relay_fallback: true
+  # IMPORTANTÍSSIMO: trânsito por default negado
+  transit: "deny"              # deny | allow
+  # Quando transit=allow, você pode querer limitar quais peers podem ser trânsito
+  transit_policy:
+    allowed_transit_peers: []
+    denied_transit_peers:
+      - "curitiba-c-01"
+
+security:
+  # Segurança do canal de controle (troca de rotas, handshake)
+  control_plane:
+    transport: "grpc"
+    listen:
+      address: "0.0.0.0"
+      port: 9898
+    tls:
+      enabled: false
+      # enabled: true
+      # cert_file: "/etc/n-netman/tls/server.crt"
+      # key_file: "/etc/n-netman/tls/server.key"
+      # ca_file: "/etc/n-netman/tls/ca.crt"
+
+observability:
+  logging:
+    level: "info"
+    format: "json"
+  metrics:
+    enabled: true
+    listen:
+      address: "127.0.0.1"
+      port: 9109
+  healthcheck:
+    enabled: true
+    listen:
+      address: "127.0.0.1"
+      port: 9110
