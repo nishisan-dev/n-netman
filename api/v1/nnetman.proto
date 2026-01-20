@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package nnetman.v1;
+
+option go_package = "github.com/lucas/n-netman/api/v1;nnetmanv1";
+
+// NNetMan is the control plane service for n-netman agents.
+// It enables route exchange and peer health monitoring between nodes.
+service NNetMan {
+  // ExchangeState performs initial state synchronization between peers.
+  // Called when establishing connection to exchange current routing state.
+  rpc ExchangeState(StateRequest) returns (StateResponse);
+
+  // AnnounceRoutes sends route announcements to a peer.
+  // Used for incremental route updates after initial sync.
+  rpc AnnounceRoutes(RouteAnnouncement) returns (RouteAck);
+
+  // WithdrawRoutes notifies a peer that routes are being withdrawn.
+  rpc WithdrawRoutes(RouteWithdrawal) returns (RouteAck);
+
+  // Keepalive is a bidirectional stream for health monitoring.
+  rpc Keepalive(stream KeepaliveRequest) returns (stream KeepaliveResponse);
+}
+
+// StateRequest is sent when initiating state exchange with a peer.
+message StateRequest {
+  // ID of the requesting node
+  string node_id = 1;
+  
+  // Current routes exported by this node
+  repeated Route routes = 2;
+  
+  // Timestamp of the request (Unix millis)
+  int64 timestamp_ms = 3;
+}
+
+// StateResponse contains the peer's current state.
+message StateResponse {
+  // ID of the responding node
+  string node_id = 1;
+  
+  // Current routes exported by the peer
+  repeated Route routes = 2;
+  
+  // Timestamp of the response (Unix millis)
+  int64 timestamp_ms = 3;
+  
+  // Whether the peer accepted our routes
+  bool accepted = 4;
+}
+
+// Route represents a network route announcement.
+message Route {
+  // Network prefix in CIDR notation (e.g., "172.16.10.0/24" or "2001:db8::/32")
+  string prefix = 1;
+  
+  // Next-hop IP address (typically the overlay IP of the announcing node)
+  string next_hop = 2;
+  
+  // Route metric/preference (lower is better)
+  uint32 metric = 3;
+  
+  // Lease duration in seconds (route expires if not refreshed)
+  uint32 lease_seconds = 4;
+  
+  // Optional: tags/communities for policy matching
+  repeated string tags = 5;
+}
+
+// RouteAnnouncement sends new or updated routes to a peer.
+message RouteAnnouncement {
+  // ID of the announcing node
+  string node_id = 1;
+  
+  // Routes being announced
+  repeated Route routes = 2;
+  
+  // Timestamp of the announcement (Unix millis)
+  int64 timestamp_ms = 3;
+}
+
+// RouteWithdrawal notifies a peer that routes are being removed.
+message RouteWithdrawal {
+  // ID of the withdrawing node
+  string node_id = 1;
+  
+  // Prefixes being withdrawn
+  repeated string prefixes = 2;
+  
+  // Timestamp of the withdrawal (Unix millis)
+  int64 timestamp_ms = 3;
+}
+
+// RouteAck acknowledges route announcements or withdrawals.
+message RouteAck {
+  // Whether the routes were accepted
+  bool accepted = 1;
+  
+  // Number of routes processed
+  uint32 routes_processed = 2;
+  
+  // Error message if not accepted
+  string error = 3;
+}
+
+// KeepaliveRequest is sent periodically to maintain peer liveness.
+message KeepaliveRequest {
+  // ID of the sending node
+  string node_id = 1;
+  
+  // Sequence number for detecting packet loss
+  uint64 sequence = 2;
+  
+  // Timestamp (Unix millis)
+  int64 timestamp_ms = 3;
+}
+
+// KeepaliveResponse acknowledges a keepalive request.
+message KeepaliveResponse {
+  // ID of the responding node
+  string node_id = 1;
+  
+  // Echo back the sequence number
+  uint64 sequence = 2;
+  
+  // Timestamp (Unix millis)
+  int64 timestamp_ms = 3;
+  
+  // Peer's current health status
+  PeerHealth health = 4;
+}
+
+// PeerHealth reports the current health status of a peer.
+message PeerHealth {
+  // Whether the peer considers itself healthy
+  bool healthy = 1;
+  
+  // Number of active routes
+  uint32 route_count = 2;
+  
+  // Uptime in seconds
+  uint64 uptime_seconds = 3;
+}
