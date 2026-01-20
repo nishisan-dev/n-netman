@@ -134,6 +134,7 @@ func statusCmd() *cobra.Command {
 			// Check VXLAN status
 			vxlanMgr := nlink.NewVXLANManager()
 			bridgeMgr := nlink.NewBridgeManager()
+			routeMgr := nlink.NewRouteManager()
 
 			fmt.Println("📡 VXLAN Interfaces:")
 			fmt.Println("─────────────────────────────────────────")
@@ -180,9 +181,59 @@ func statusCmd() *cobra.Command {
 			}
 			w.Flush()
 
+			// Route Statistics
+			fmt.Println()
+			fmt.Println("📊 Route Statistics:")
+			fmt.Println("─────────────────────────────────────────")
+
+			// Exported routes (from config)
+			exportCount := len(cfg.Routing.Export.Networks)
+			fmt.Printf("  📤 Exported:   %d route(s)", exportCount)
+			if exportCount > 0 && exportCount <= 3 {
+				fmt.Printf(" (%s)", formatPrefixList(cfg.Routing.Export.Networks))
+			}
+			fmt.Println()
+
+			// Installed routes (from kernel routing table)
+			table := cfg.Routing.Import.Install.Table
+			if table == 0 {
+				table = 100 // default
+			}
+			installedRoutes, err := routeMgr.ListByProtocol(table, nlink.RouteProtocolNNetMan)
+			installedCount := 0
+			if err == nil {
+				installedCount = len(installedRoutes)
+			}
+			fmt.Printf("  📥 Installed:  %d route(s) in table %d\n", installedCount, table)
+
+			// Show installed route details if not too many
+			if installedCount > 0 && installedCount <= 5 {
+				for _, r := range installedRoutes {
+					if r.Destination != nil {
+						gw := "-"
+						if r.Gateway != nil {
+							gw = r.Gateway.String()
+						}
+						fmt.Printf("      • %s via %s\n", r.Destination.String(), gw)
+					}
+				}
+			}
+
 			return nil
 		},
 	}
+}
+
+// formatPrefixList formats a list of prefixes for display
+func formatPrefixList(prefixes []string) string {
+	if len(prefixes) == 0 {
+		return ""
+	}
+	result := prefixes[0]
+	for i := 1; i < len(prefixes); i++ {
+		result += ", " + prefixes[i]
+	}
+	return result
 }
 
 func routesCmd() *cobra.Command {
