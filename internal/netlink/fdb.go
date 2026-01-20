@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // FDBManager manages Forwarding Database entries for VXLAN interfaces.
@@ -17,10 +18,10 @@ func NewFDBManager() *FDBManager {
 
 // FDBEntry represents a forwarding database entry.
 type FDBEntry struct {
-	MAC        net.HardwareAddr // MAC address (use all zeros for BUM traffic)
-	RemoteIP   net.IP           // Remote VTEP IP
-	VXLANName  string           // VXLAN interface name
-	Permanent  bool             // Permanent entry (won't age out)
+	MAC       net.HardwareAddr // MAC address (use all zeros for BUM traffic)
+	RemoteIP  net.IP           // Remote VTEP IP
+	VXLANName string           // VXLAN interface name
+	Permanent bool             // Permanent entry (won't age out)
 }
 
 // Add adds an FDB entry to a VXLAN interface.
@@ -32,23 +33,29 @@ func (m *FDBManager) Add(entry FDBEntry) error {
 		return fmt.Errorf("interface %s not found: %w", entry.VXLANName, err)
 	}
 
-	// Build neigh entry
+	// Verify it's a VXLAN interface
+	if _, ok := link.(*netlink.Vxlan); !ok {
+		return fmt.Errorf("interface %s is not a VXLAN", entry.VXLANName)
+	}
+
+	// Build neigh entry for VXLAN FDB
 	neigh := &netlink.Neigh{
 		LinkIndex:    link.Attrs().Index,
-		Family:       netlink.NDA_VNI, // For VXLAN FDB
+		Family:       unix.AF_BRIDGE, // FDB entries use AF_BRIDGE
+		Flags:        unix.NTF_SELF,  // Self-learned (local FDB, not forwarded to bridge)
 		HardwareAddr: entry.MAC,
 		IP:           entry.RemoteIP,
 	}
 
-	// Set flags
+	// Set state
 	if entry.Permanent {
 		neigh.State = netlink.NUD_PERMANENT
 	} else {
 		neigh.State = netlink.NUD_REACHABLE
 	}
 
-	// Use NeighAppend to add FDB entry (avoids conflicts with existing entries)
-	if err := netlink.NeighAppend(neigh); err != nil {
+	// Use NeighSet to add/update FDB entry
+	if err := netlink.NeighSet(neigh); err != nil {
 		return fmt.Errorf("failed to add FDB entry: %w", err)
 	}
 
@@ -64,14 +71,15 @@ func (m *FDBManager) Delete(entry FDBEntry) error {
 
 	neigh := &netlink.Neigh{
 		LinkIndex:    link.Attrs().Index,
-		Family:       netlink.NDA_VNI,
+		Family:       unix.AF_BRIDGE,
+		Flags:        unix.NTF_SELF,
 		HardwareAddr: entry.MAC,
 		IP:           entry.RemoteIP,
 	}
 
 	if err := netlink.NeighDel(neigh); err != nil {
-		// Ignore "no such file or directory" errors (entry doesn't exist)
-		return fmt.Errorf("failed to delete FDB entry: %w", err)
+		// Ignore errors (entry might not exist)
+		return nil
 	}
 
 	return nil
@@ -84,21 +92,21 @@ func (m *FDBManager) List(vxlanName string) ([]FDBEntry, error) {
 		return nil, fmt.Errorf("interface %s not found: %w", vxlanName, err)
 	}
 
-	// Get all neighbors (FDB entries) for this link
-	neighs, err := netlink.NeighList(link.Attrs().Index, netlink.FAMILY_ALL)
+	// Get all bridge FDB neighbors for this link
+	neighs, err := netlink.NeighList(link.Attrs().Index, unix.AF_BRIDGE)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list FDB entries: %w", err)
 	}
 
 	var entries []FDBEntry
 	for _, n := range neighs {
-		// Filter to only FDB entries (those with IP addresses - VTEP destinations)
-		if n.IP != nil {
+		// Filter to only FDB entries with IP addresses (VTEP destinations)
+		if n.IP != nil && len(n.IP) > 0 {
 			entries = append(entries, FDBEntry{
-				MAC:        n.HardwareAddr,
-				RemoteIP:   n.IP,
-				VXLANName:  vxlanName,
-				Permanent:  n.State == netlink.NUD_PERMANENT,
+				MAC:       n.HardwareAddr,
+				RemoteIP:  n.IP,
+				VXLANName: vxlanName,
+				Permanent: n.State == netlink.NUD_PERMANENT,
 			})
 		}
 	}
@@ -111,19 +119,19 @@ func (m *FDBManager) List(vxlanName string) ([]FDBEntry, error) {
 // to enable flooding to this peer for unknown destinations.
 func (m *FDBManager) AddPeer(vxlanName string, remoteIP net.IP) error {
 	return m.Add(FDBEntry{
-		MAC:        net.HardwareAddr{0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-		RemoteIP:   remoteIP,
-		VXLANName:  vxlanName,
-		Permanent:  true,
+		MAC:       net.HardwareAddr{0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		RemoteIP:  remoteIP,
+		VXLANName: vxlanName,
+		Permanent: true,
 	})
 }
 
 // DeletePeer removes a remote VXLAN peer (VTEP) from the FDB.
 func (m *FDBManager) DeletePeer(vxlanName string, remoteIP net.IP) error {
 	return m.Delete(FDBEntry{
-		MAC:        net.HardwareAddr{0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-		RemoteIP:   remoteIP,
-		VXLANName:  vxlanName,
+		MAC:       net.HardwareAddr{0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		RemoteIP:  remoteIP,
+		VXLANName: vxlanName,
 	})
 }
 

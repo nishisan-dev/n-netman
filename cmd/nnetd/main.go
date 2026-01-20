@@ -213,24 +213,71 @@ func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, rou
 
 // getLocalExportableRoutes returns routes that should be exported to peers.
 func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.RouteTable) []controlplane.Route {
-	// Get routes marked as exportable (local routes)
 	routes := make([]controlplane.Route, 0)
 
-	// Determine next-hop (use first peer endpoint as our VTEP IP for now)
-	// In production, this should be the local overlay IP
-	// TODO: properly get local overlay IP from config or underlay interface
+	// Detect local IP by finding interface that can reach our peers
+	localIP := detectLocalIP(cfg)
+	if localIP == "" {
+		return routes // Can't export routes without a valid next-hop
+	}
 
 	// Add routes from config exports
 	for _, prefix := range cfg.Routing.Export.Networks {
 		routes = append(routes, controlplane.Route{
 			Prefix:       prefix,
-			NextHop:      "", // Will be filled by routing manager based on overlay IP
+			NextHop:      localIP,
 			Metric:       uint32(cfg.Routing.Export.Metric),
 			LeaseSeconds: uint32(cfg.Routing.Import.Install.RouteLeaseSeconds),
 		})
 	}
 
 	return routes
+}
+
+// detectLocalIP finds the local IP address that should be used for route announcements.
+// It looks for the IP on the same subnet as configured peers.
+func detectLocalIP(cfg *config.Config) string {
+	if len(cfg.Overlay.Peers) == 0 {
+		return ""
+	}
+
+	// Get first peer's IP to determine our subnet
+	peerIP := net.ParseIP(cfg.Overlay.Peers[0].Endpoint.Address)
+	if peerIP == nil {
+		return ""
+	}
+
+	// Get all network interfaces
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range ifaces {
+		// Skip loopback and down interfaces
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			// Check if peer IP is in same subnet
+			if ipnet.Contains(peerIP) {
+				return ipnet.IP.String()
+			}
+		}
+	}
+
+	return ""
 }
 
 // runRouteRefreshLoop periodically refreshes routes with peers.
