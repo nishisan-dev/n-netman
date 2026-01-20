@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/lucas/n-netman/internal/config"
+	"github.com/lucas/n-netman/internal/reconciler"
 )
 
 var (
@@ -70,7 +72,18 @@ func main() {
 		cancel()
 	}()
 
-	// TODO: Start reconciler loop
+	// Start reconciler
+	rec := reconciler.New(cfg,
+		reconciler.WithInterval(10*time.Second),
+		reconciler.WithLogger(logger),
+	)
+
+	go func() {
+		if err := rec.Run(ctx); err != nil && err != context.Canceled {
+			slog.Error("reconciler error", "error", err)
+		}
+	}()
+
 	// TODO: Start gRPC server
 	// TODO: Start metrics/health servers
 
