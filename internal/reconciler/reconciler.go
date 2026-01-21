@@ -114,32 +114,51 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 
 	r.logger.Debug("starting reconciliation")
 
-	// Step 1: Ensure bridge exists (if KVM mode with managed bridges)
-	if err := r.reconcileBridge(ctx); err != nil {
-		r.setError(err)
-		return fmt.Errorf("bridge reconciliation failed: %w", err)
+	// Get all overlays (works for both v1 and v2 configs)
+	overlays := r.cfg.GetOverlays()
+	if len(overlays) == 0 {
+		r.logger.Warn("no overlays configured, skipping reconciliation")
+		return nil
 	}
 
-	// Step 2: Ensure VXLAN interface exists and is attached to bridge
-	if err := r.reconcileVXLAN(ctx); err != nil {
-		r.setError(err)
-		return fmt.Errorf("vxlan reconciliation failed: %w", err)
+	// Reconcile each overlay
+	for _, overlay := range overlays {
+		if err := r.reconcileOverlay(ctx, overlay); err != nil {
+			r.setError(err)
+			return fmt.Errorf("overlay %s (VNI %d) reconciliation failed: %w", overlay.Name, overlay.VNI, err)
+		}
 	}
 
-	// Step 3: Sync FDB entries for peers
-	if err := r.reconcileFDB(ctx); err != nil {
-		r.setError(err)
-		return fmt.Errorf("fdb reconciliation failed: %w", err)
-	}
-
-	r.logger.Debug("reconciliation complete")
+	r.logger.Debug("reconciliation complete", "overlay_count", len(overlays))
 	r.setError(nil)
 	return nil
 }
 
-// reconcileBridge ensures the bridge exists and is configured correctly.
-func (r *Reconciler) reconcileBridge(ctx context.Context) error {
-	bridgeName := r.cfg.Overlay.VXLAN.Bridge
+// reconcileOverlay reconciles a single overlay (bridge, VXLAN, FDB).
+func (r *Reconciler) reconcileOverlay(ctx context.Context, overlay config.OverlayDef) error {
+	r.logger.Debug("reconciling overlay", "name", overlay.Name, "vni", overlay.VNI, "bridge", overlay.Bridge)
+
+	// Step 1: Ensure bridge exists
+	if err := r.reconcileBridgeForOverlay(ctx, overlay); err != nil {
+		return fmt.Errorf("bridge reconciliation failed: %w", err)
+	}
+
+	// Step 2: Ensure VXLAN interface exists and is attached to bridge
+	if err := r.reconcileVXLANForOverlay(ctx, overlay); err != nil {
+		return fmt.Errorf("vxlan reconciliation failed: %w", err)
+	}
+
+	// Step 3: Sync FDB entries for peers
+	if err := r.reconcileFDBForOverlay(ctx, overlay); err != nil {
+		return fmt.Errorf("fdb reconciliation failed: %w", err)
+	}
+
+	return nil
+}
+
+// reconcileBridgeForOverlay ensures the bridge for an overlay exists and is configured correctly.
+func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay config.OverlayDef) error {
+	bridgeName := overlay.Bridge
 
 	// Check KVM config for bridge settings
 	var bridgeCfg *config.BridgeDef
@@ -150,10 +169,10 @@ func (r *Reconciler) reconcileBridge(ctx context.Context) error {
 		}
 	}
 
-	// If bridge is managed or doesn't exist in KVM config, create it
+	// Determine MTU from overlay or defaults
 	mtu := 1450 // Default
-	if r.cfg.Overlay.VXLAN.MTU > 0 {
-		mtu = r.cfg.Overlay.VXLAN.MTU
+	if overlay.MTU > 0 {
+		mtu = overlay.MTU
 	}
 
 	if bridgeCfg != nil && bridgeCfg.Manage {
@@ -186,49 +205,54 @@ func (r *Reconciler) reconcileBridge(ctx context.Context) error {
 	return nil
 }
 
-// reconcileVXLAN ensures the VXLAN interface exists and is attached to the bridge.
-func (r *Reconciler) reconcileVXLAN(ctx context.Context) error {
-	vxlanCfg := r.cfg.Overlay.VXLAN
-
+// reconcileVXLANForOverlay ensures the VXLAN interface for an overlay exists and is attached to the bridge.
+func (r *Reconciler) reconcileVXLANForOverlay(ctx context.Context, overlay config.OverlayDef) error {
 	r.logger.Debug("ensuring vxlan interface",
-		"name", vxlanCfg.Name,
-		"vni", vxlanCfg.VNI,
-		"bridge", vxlanCfg.Bridge,
+		"name", overlay.Name,
+		"vni", overlay.VNI,
+		"bridge", overlay.Bridge,
+		"underlay_interface", overlay.UnderlayInterface,
 	)
 
 	// Determine local underlay IP
-	// TODO: Implement proper underlay IP detection from netplan config
+	// TODO: Implement proper underlay IP detection based on overlay.UnderlayInterface
 	var localIP net.IP
 
+	// Use default DstPort if not specified
+	dstPort := overlay.DstPort
+	if dstPort == 0 {
+		dstPort = 4789
+	}
+
 	cfg := nlink.VXLANConfig{
-		Name:     vxlanCfg.Name,
-		VNI:      vxlanCfg.VNI,
-		DstPort:  vxlanCfg.DstPort,
+		Name:     overlay.Name,
+		VNI:      overlay.VNI,
+		DstPort:  dstPort,
 		LocalIP:  localIP,
-		MTU:      vxlanCfg.MTU,
-		Learning: vxlanCfg.Learning,
-		Bridge:   vxlanCfg.Bridge,
+		MTU:      overlay.MTU,
+		Learning: overlay.Learning,
+		Bridge:   overlay.Bridge,
 	}
 
 	if err := r.vxlan.Create(cfg); err != nil {
-		return fmt.Errorf("failed to create vxlan: %w", err)
+		return fmt.Errorf("failed to create vxlan %s: %w", overlay.Name, err)
 	}
 
 	return nil
 }
 
-// reconcileFDB syncs FDB entries with configured peers.
+// reconcileFDBForOverlay syncs FDB entries with configured peers for an overlay.
 // Note: When VXLAN learning is enabled, the kernel manages FDB automatically
 // and manual FDB entries are not needed.
-func (r *Reconciler) reconcileFDB(ctx context.Context) error {
-	vxlanName := r.cfg.Overlay.VXLAN.Name
-	peers := r.cfg.Overlay.Peers
-
+func (r *Reconciler) reconcileFDBForOverlay(ctx context.Context, overlay config.OverlayDef) error {
 	// Skip FDB sync when learning is enabled - kernel manages it automatically
-	if r.cfg.Overlay.VXLAN.Learning {
-		r.logger.Debug("skipping fdb sync, vxlan learning is enabled", "vxlan", vxlanName)
+	if overlay.Learning {
+		r.logger.Debug("skipping fdb sync, vxlan learning is enabled", "vxlan", overlay.Name)
 		return nil
 	}
+
+	// Get peers from legacy config (for now, v2 will need per-overlay peers)
+	peers := r.cfg.GetPeers()
 
 	// Build list of peer IPs
 	var peerIPs []net.IP
@@ -241,10 +265,10 @@ func (r *Reconciler) reconcileFDB(ctx context.Context) error {
 		peerIPs = append(peerIPs, ip)
 	}
 
-	r.logger.Debug("syncing fdb entries", "vxlan", vxlanName, "peer_count", len(peerIPs))
+	r.logger.Debug("syncing fdb entries", "vxlan", overlay.Name, "peer_count", len(peerIPs))
 
-	if err := r.fdb.SyncPeers(vxlanName, peerIPs); err != nil {
-		return fmt.Errorf("failed to sync fdb: %w", err)
+	if err := r.fdb.SyncPeers(overlay.Name, peerIPs); err != nil {
+		return fmt.Errorf("failed to sync fdb for %s: %w", overlay.Name, err)
 	}
 
 	return nil
