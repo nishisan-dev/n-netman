@@ -260,11 +260,22 @@ func statusCmd() *cobra.Command {
 			fmt.Printf("  📥 Installed:  %d route(s) in table %d\n", installedCount, table)
 
 			// Show installed route details if not too many
-			if installedCount > 0 && installedCount <= 5 {
+			if installedCount > 0 && installedCount <= 8 {
 				// Build map of gateway IP to peer ID
 				peerByIP := make(map[string]string)
 				for _, peer := range peers {
 					peerByIP[peer.Endpoint.Address] = peer.ID
+				}
+
+				// Build map of prefix to VNI based on exported routes from other peers
+				// Since we don't know the VNI from kernel, we infer from config structure
+				prefixToVNI := make(map[string]int)
+				for _, o := range overlays {
+					// Each overlay exports specific networks, so imports from other peers
+					// should match those patterns. For simplicity, show the table as VNI hint.
+					for _, prefix := range o.Routing.Export.Networks {
+						prefixToVNI[prefix] = o.VNI
+					}
 				}
 
 				for _, r := range installedRoutes {
@@ -277,7 +288,12 @@ func statusCmd() *cobra.Command {
 								peerName = " (" + name + ")"
 							}
 						}
-						fmt.Printf("      • %s via %s%s\n", r.Destination.String(), gw, peerName)
+						// Add device info
+						devInfo := ""
+						if r.Device != "" {
+							devInfo = " dev " + r.Device
+						}
+						fmt.Printf("      • %s via %s%s%s\n", r.Destination.String(), gw, peerName, devInfo)
 					}
 				}
 			}
