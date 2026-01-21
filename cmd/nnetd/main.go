@@ -254,10 +254,17 @@ func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.Route
 			metric = 100
 		}
 
+		// Determine next-hop: prefer bridge IP (overlay) over underlay IP
+		nextHop := localIP
+		if overlay.Bridge.IPv4 != "" {
+			// Extract IP from CIDR (e.g., "10.100.0.1/24" -> "10.100.0.1")
+			nextHop = extractIPFromCIDR(overlay.Bridge.IPv4)
+		}
+
 		for _, prefix := range overlay.Routing.Export.Networks {
 			routes = append(routes, controlplane.Route{
 				Prefix:       prefix,
-				NextHop:      localIP,
+				NextHop:      nextHop,
 				Metric:       metric,
 				LeaseSeconds: leaseSecs,
 				VNI:          uint32(overlay.VNI),
@@ -312,6 +319,20 @@ func detectLocalIP(cfg *config.Config) string {
 	}
 
 	return ""
+}
+
+// extractIPFromCIDR extracts the IP address from a CIDR string.
+// e.g., "10.100.0.1/24" -> "10.100.0.1"
+func extractIPFromCIDR(cidr string) string {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		// Try parsing as plain IP
+		if parsedIP := net.ParseIP(cidr); parsedIP != nil {
+			return parsedIP.String()
+		}
+		return cidr // Return as-is if parsing fails
+	}
+	return ip.String()
 }
 
 // runRouteRefreshLoop periodically refreshes routes with peers.
