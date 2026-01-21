@@ -170,7 +170,9 @@ type Route struct {
 	// Lease duration in seconds (route expires if not refreshed)
 	LeaseSeconds uint32 `protobuf:"varint,4,opt,name=lease_seconds,json=leaseSeconds,proto3" json:"lease_seconds,omitempty"`
 	// Optional: tags/communities for policy matching
-	Tags          []string `protobuf:"bytes,5,rep,name=tags,proto3" json:"tags,omitempty"`
+	Tags []string `protobuf:"bytes,5,rep,name=tags,proto3" json:"tags,omitempty"`
+	// VNI of the overlay this route belongs to (for multi-overlay support)
+	Vni           uint32 `protobuf:"varint,6,opt,name=vni,proto3" json:"vni,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -238,6 +240,13 @@ func (x *Route) GetTags() []string {
 		return x.Tags
 	}
 	return nil
+}
+
+func (x *Route) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
 }
 
 // RouteAnnouncement sends new or updated routes to a peer.
@@ -647,13 +656,14 @@ const file_api_v1_nnetman_proto_rawDesc = "" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x06routes\x18\x02 \x03(\v2\x11.nnetman.v1.RouteR\x06routes\x12!\n" +
 	"\ftimestamp_ms\x18\x03 \x01(\x03R\vtimestampMs\x12\x1a\n" +
-	"\baccepted\x18\x04 \x01(\bR\baccepted\"\x8b\x01\n" +
+	"\baccepted\x18\x04 \x01(\bR\baccepted\"\x9d\x01\n" +
 	"\x05Route\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x19\n" +
 	"\bnext_hop\x18\x02 \x01(\tR\anextHop\x12\x16\n" +
 	"\x06metric\x18\x03 \x01(\rR\x06metric\x12#\n" +
 	"\rlease_seconds\x18\x04 \x01(\rR\fleaseSeconds\x12\x12\n" +
-	"\x04tags\x18\x05 \x03(\tR\x04tags\"z\n" +
+	"\x04tags\x18\x05 \x03(\tR\x04tags\x12\x10\n" +
+	"\x03vni\x18\x06 \x01(\rR\x03vni\"z\n" +
 	"\x11RouteAnnouncement\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x06routes\x18\x02 \x03(\v2\x11.nnetman.v1.RouteR\x06routes\x12!\n" +

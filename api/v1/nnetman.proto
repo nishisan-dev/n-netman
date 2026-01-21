@@ -65,6 +65,9 @@ message Route {
   
   // Optional: tags/communities for policy matching
   repeated string tags = 5;
+  
+  // VNI of the overlay this route belongs to (for multi-overlay support)
+  uint32 vni = 6;
 }
 
 // RouteAnnouncement sends new or updated routes to a peer.
