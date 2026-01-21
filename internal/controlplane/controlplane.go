@@ -204,6 +204,9 @@ func (s *Server) Start() error {
 	s.startTime = time.Now()
 	s.mu.Unlock()
 
+	// Load local routes from config overlays
+	s.LoadLocalRoutes()
+
 	s.logger.Info("control plane server started", "address", addr)
 
 	// Serve in a goroutine
@@ -214,6 +217,31 @@ func (s *Server) Start() error {
 	}()
 
 	return nil
+}
+
+// LoadLocalRoutes loads routes from config overlays into the route table.
+// These routes will be exported to peers when they connect.
+func (s *Server) LoadLocalRoutes() {
+	overlays := s.cfg.GetOverlays()
+	count := 0
+
+	for _, overlay := range overlays {
+		for _, network := range overlay.Routing.Export.Networks {
+			route := Route{
+				Prefix: network,
+				Metric: uint32(overlay.Routing.Export.Metric),
+				VNI:    uint32(overlay.VNI),
+				PeerID: "", // Empty = local route
+			}
+			if route.Metric == 0 {
+				route.Metric = 100
+			}
+			s.routeTable.Add(route)
+			count++
+		}
+	}
+
+	s.logger.Info("loaded local routes from config", "count", count)
 }
 
 // Stop gracefully stops the server.

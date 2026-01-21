@@ -57,11 +57,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	overlays := cfg.GetOverlays()
+	peers := cfg.GetPeers()
 	slog.Info("configuration loaded successfully",
 		"node_id", cfg.Node.ID,
 		"hostname", cfg.Node.Hostname,
-		"vxlan_vni", cfg.Overlay.VXLAN.VNI,
-		"peers_count", len(cfg.Overlay.Peers),
+		"config_version", cfg.Version,
+		"overlays_count", len(overlays),
+		"peers_count", len(peers),
 	)
 
 	// Setup context with cancellation
@@ -80,7 +83,7 @@ func main() {
 
 	// Initialize metrics
 	metrics := observability.NewMetrics(prometheus.DefaultRegisterer)
-	metrics.PeersConfigured.Set(float64(len(cfg.Overlay.Peers)))
+	metrics.PeersConfigured.Set(float64(len(peers)))
 
 	// Start observability server (metrics + health)
 	obsServer := observability.NewServer(cfg, logger)
@@ -240,14 +243,26 @@ func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.Route
 		return routes // Can't export routes without a valid next-hop
 	}
 
-	// Add routes from config exports
-	for _, prefix := range cfg.Routing.Export.Networks {
-		routes = append(routes, controlplane.Route{
-			Prefix:       prefix,
-			NextHop:      localIP,
-			Metric:       uint32(cfg.Routing.Export.Metric),
-			LeaseSeconds: uint32(cfg.Routing.Import.Install.RouteLeaseSeconds),
-		})
+	// Add routes from all overlays
+	for _, overlay := range cfg.GetOverlays() {
+		leaseSecs := uint32(overlay.Routing.Import.Install.RouteLeaseSeconds)
+		if leaseSecs == 0 {
+			leaseSecs = 30
+		}
+		metric := uint32(overlay.Routing.Export.Metric)
+		if metric == 0 {
+			metric = 100
+		}
+
+		for _, prefix := range overlay.Routing.Export.Networks {
+			routes = append(routes, controlplane.Route{
+				Prefix:       prefix,
+				NextHop:      localIP,
+				Metric:       metric,
+				LeaseSeconds: leaseSecs,
+				VNI:          uint32(overlay.VNI),
+			})
+		}
 	}
 
 	return routes

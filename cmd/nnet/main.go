@@ -87,16 +87,24 @@ It creates/updates VXLAN interfaces, bridges, and FDB entries as needed.`,
 
 			fmt.Printf("📋 Loading configuration from: %s\n", configPath)
 			fmt.Printf("   Node ID: %s\n", cfg.Node.ID)
-			fmt.Printf("   VXLAN: %s (VNI %d)\n", cfg.Overlay.VXLAN.Name, cfg.Overlay.VXLAN.VNI)
-			fmt.Printf("   Bridge: %s\n", cfg.Overlay.VXLAN.Bridge)
-			fmt.Printf("   Peers: %d\n\n", len(cfg.Overlay.Peers))
+
+			overlays := cfg.GetOverlays()
+			peers := cfg.GetPeers()
+			fmt.Printf("   Config Version: %d\n", cfg.Version)
+			fmt.Printf("   Overlays: %d\n", len(overlays))
+			for _, o := range overlays {
+				fmt.Printf("     • VNI %d: %s (bridge: %s)\n", o.VNI, o.Name, o.Bridge)
+			}
+			fmt.Printf("   Peers: %d\n\n", len(peers))
 
 			if dryRun {
 				fmt.Println("🔍 Dry-run mode - no changes will be made")
 				fmt.Println("\nWould perform:")
-				fmt.Printf("  • Create bridge: %s\n", cfg.Overlay.VXLAN.Bridge)
-				fmt.Printf("  • Create VXLAN: %s (VNI %d)\n", cfg.Overlay.VXLAN.Name, cfg.Overlay.VXLAN.VNI)
-				for _, peer := range cfg.Overlay.Peers {
+				for _, o := range overlays {
+					fmt.Printf("  • Create bridge: %s\n", o.Bridge)
+					fmt.Printf("  • Create VXLAN: %s (VNI %d)\n", o.Name, o.VNI)
+				}
+				for _, peer := range peers {
 					fmt.Printf("  • Add FDB entry for peer: %s (%s)\n", peer.ID, peer.Endpoint.Address)
 				}
 				return nil
@@ -139,38 +147,53 @@ func statusCmd() *cobra.Command {
 			vxlanMgr := nlink.NewVXLANManager()
 			bridgeMgr := nlink.NewBridgeManager()
 			routeMgr := nlink.NewRouteManager()
+			overlays := cfg.GetOverlays()
+			peers := cfg.GetPeers()
 
 			fmt.Println("📡 VXLAN Interfaces:")
 			fmt.Println("─────────────────────────────────────────")
 
-			vxlanInfo, err := vxlanMgr.Get(cfg.Overlay.VXLAN.Name)
-			if err != nil {
-				fmt.Printf("  ❌ %s: not found\n", cfg.Overlay.VXLAN.Name)
-			} else {
-				status := "🔴 DOWN"
-				if vxlanInfo.Up {
-					status = "🟢 UP"
+			vxlanFound := false
+			for _, o := range overlays {
+				vxlanInfo, err := vxlanMgr.Get(o.Name)
+				if err != nil {
+					fmt.Printf("  ❌ %s: not found\n", o.Name)
+				} else {
+					vxlanFound = true
+					status := "🔴 DOWN"
+					if vxlanInfo.Up {
+						status = "🟢 UP"
+					}
+					fmt.Printf("  %s %s (VNI %d, MTU %d)\n", status, vxlanInfo.Name, vxlanInfo.VNI, vxlanInfo.MTU)
 				}
-				fmt.Printf("  %s %s (VNI %d, MTU %d)\n", status, vxlanInfo.Name, vxlanInfo.VNI, vxlanInfo.MTU)
+			}
+			if len(overlays) == 0 {
+				fmt.Println("  (no overlays configured)")
 			}
 
 			fmt.Println()
 			fmt.Println("🌉 Bridges:")
 			fmt.Println("─────────────────────────────────────────")
 
-			bridgeInfo, err := bridgeMgr.Get(cfg.Overlay.VXLAN.Bridge)
-			if err != nil {
-				fmt.Printf("  ❌ %s: not found\n", cfg.Overlay.VXLAN.Bridge)
-			} else {
-				status := "🔴 DOWN"
-				if bridgeInfo.Up {
-					status = "🟢 UP"
-				}
-				fmt.Printf("  %s %s (MTU %d)\n", status, bridgeInfo.Name, bridgeInfo.MTU)
-				if len(bridgeInfo.AttachedInterfaces) > 0 {
-					fmt.Printf("      Attached: %v\n", bridgeInfo.AttachedInterfaces)
+			for _, o := range overlays {
+				bridgeInfo, err := bridgeMgr.Get(o.Bridge)
+				if err != nil {
+					fmt.Printf("  ❌ %s: not found\n", o.Bridge)
+				} else {
+					status := "🔴 DOWN"
+					if bridgeInfo.Up {
+						status = "🟢 UP"
+					}
+					fmt.Printf("  %s %s (MTU %d)\n", status, bridgeInfo.Name, bridgeInfo.MTU)
+					if len(bridgeInfo.AttachedInterfaces) > 0 {
+						fmt.Printf("      Attached: %v\n", bridgeInfo.AttachedInterfaces)
+					}
 				}
 			}
+			if len(overlays) == 0 {
+				fmt.Println("  (no overlays configured)")
+			}
+			_ = vxlanFound // silence unused variable
 
 			// Try to get live status from daemon
 			daemonStatus := getDaemonStatus(cfg)
@@ -185,7 +208,7 @@ func statusCmd() *cobra.Command {
 
 			if daemonStatus != nil {
 				// Use live status from daemon
-				for _, peer := range cfg.Overlay.Peers {
+				for _, peer := range peers {
 					ps, ok := daemonStatus.Peers[peer.ID]
 					if ok {
 						statusIcon := getStatusIcon(ps.Status)
@@ -200,7 +223,7 @@ func statusCmd() *cobra.Command {
 				}
 			} else {
 				// Fallback: daemon not running
-				for _, peer := range cfg.Overlay.Peers {
+				for _, peer := range peers {
 					fmt.Fprintf(w, "  %s\t%s\t⚠️  daemon offline\t-\n", peer.ID, peer.Endpoint.Address)
 				}
 			}
@@ -211,18 +234,23 @@ func statusCmd() *cobra.Command {
 			fmt.Println("📊 Route Statistics:")
 			fmt.Println("─────────────────────────────────────────")
 
-			// Exported routes (from config)
-			exportCount := len(cfg.Routing.Export.Networks)
+			// Exported routes (from all overlays)
+			exportCount := 0
+			exportPrefixes := []string{}
+			for _, o := range overlays {
+				exportCount += len(o.Routing.Export.Networks)
+				exportPrefixes = append(exportPrefixes, o.Routing.Export.Networks...)
+			}
 			fmt.Printf("  📤 Exported:   %d route(s)", exportCount)
 			if exportCount > 0 && exportCount <= 3 {
-				fmt.Printf(" (%s)", formatPrefixList(cfg.Routing.Export.Networks))
+				fmt.Printf(" (%s)", formatPrefixList(exportPrefixes))
 			}
 			fmt.Println()
 
-			// Installed routes (from kernel routing table)
-			table := cfg.Routing.Import.Install.Table
-			if table == 0 {
-				table = 100 // default
+			// Get default routing table from first overlay
+			table := 100
+			if len(overlays) > 0 && overlays[0].Routing.Import.Install.Table > 0 {
+				table = overlays[0].Routing.Import.Install.Table
 			}
 			installedRoutes, err := routeMgr.ListByProtocol(table, nlink.RouteProtocolNNetMan)
 			installedCount := 0
@@ -235,7 +263,7 @@ func statusCmd() *cobra.Command {
 			if installedCount > 0 && installedCount <= 5 {
 				// Build map of gateway IP to peer ID
 				peerByIP := make(map[string]string)
-				for _, peer := range cfg.Overlay.Peers {
+				for _, peer := range peers {
 					peerByIP[peer.Endpoint.Address] = peer.ID
 				}
 
@@ -328,21 +356,32 @@ func routesCmd() *cobra.Command {
 			}
 
 			routingMgr := routing.NewManager(cfg)
-			exportRoutes := routingMgr.GetExportRoutes()
+			overlays := cfg.GetOverlays()
 
 			fmt.Println("📤 Exported Routes (announced to peers):")
 			fmt.Println("─────────────────────────────────────────")
 
-			if len(exportRoutes) == 0 {
-				fmt.Println("  (none configured)")
+			if len(overlays) == 0 {
+				fmt.Println("  (no overlays configured)")
 			} else {
-				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "  PREFIX\tMETRIC")
-				fmt.Fprintln(w, "  ──────\t──────")
-				for _, r := range exportRoutes {
-					fmt.Fprintf(w, "  %s\t%d\n", r.Prefix, r.Metric)
+				totalRoutes := 0
+				for _, overlay := range overlays {
+					routes := routingMgr.GetExportRoutesForOverlay(overlay)
+					if len(routes) > 0 {
+						fmt.Printf("\n  VNI %d (%s):\n", overlay.VNI, overlay.Name)
+						w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+						fmt.Fprintln(w, "    PREFIX\tMETRIC")
+						fmt.Fprintln(w, "    ──────\t──────")
+						for _, r := range routes {
+							fmt.Fprintf(w, "    %s\t%d\n", r.Prefix, r.Metric)
+							totalRoutes++
+						}
+						w.Flush()
+					}
 				}
-				w.Flush()
+				if totalRoutes == 0 {
+					fmt.Println("  (none configured)")
+				}
 			}
 
 			fmt.Println()
