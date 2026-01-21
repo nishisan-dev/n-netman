@@ -323,8 +323,8 @@ func TestConfig_GetOverlays_V2(t *testing.T) {
 	cfg := &Config{
 		Version: 2,
 		Overlays: []OverlayDef{
-			{VNI: 100, Name: "vxlan100", Bridge: "br-100"},
-			{VNI: 200, Name: "vxlan200", Bridge: "br-200"},
+			{VNI: 100, Name: "vxlan100", Bridge: BridgeConfig{Name: "br-100"}},
+			{VNI: 200, Name: "vxlan200", Bridge: BridgeConfig{Name: "br-200"}},
 		},
 	}
 
@@ -376,8 +376,8 @@ func TestConfig_GetOverlays_V1Compatibility(t *testing.T) {
 	if o.Name != "vxlan100" {
 		t.Errorf("expected Name = 'vxlan100', got '%s'", o.Name)
 	}
-	if o.Bridge != "br-nnet-100" {
-		t.Errorf("expected Bridge = 'br-nnet-100', got '%s'", o.Bridge)
+	if o.Bridge.Name != "br-nnet-100" {
+		t.Errorf("expected Bridge.Name = 'br-nnet-100', got '%s'", o.Bridge.Name)
 	}
 
 	// Verify routing was migrated

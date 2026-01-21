@@ -82,8 +82,8 @@ func (l *Loader) validateSemantics(cfg *Config) error {
 			if o.Name == "" {
 				return fmt.Errorf("overlay[%d]: name is required", i)
 			}
-			if o.Bridge == "" {
-				return fmt.Errorf("overlay[%d]: bridge is required", i)
+			if o.Bridge.Name == "" {
+				return fmt.Errorf("overlay[%d]: bridge.name is required", i)
 			}
 		}
 	} else {

@@ -17,21 +17,27 @@ NODES = [
     prod_ip: "192.168.56.11", 
     mgmt_ip: "192.168.57.11",
     prod_net: "172.16.10.0/24",   # Overlay network for production
-    mgmt_net: "10.200.10.0/24"    # Overlay network for management
+    mgmt_net: "10.200.10.0/24",   # Overlay network for management
+    br_prod_ip: "10.100.0.1/24",  # Bridge IP for prod overlay (next-hop)
+    br_mgmt_ip: "10.200.1.1/24"   # Bridge IP for mgmt overlay (next-hop)
   },
   { 
     name: "host-b", 
     prod_ip: "192.168.56.12", 
     mgmt_ip: "192.168.57.12",
     prod_net: "172.16.20.0/24",
-    mgmt_net: "10.200.20.0/24"
+    mgmt_net: "10.200.20.0/24",
+    br_prod_ip: "10.100.0.2/24",
+    br_mgmt_ip: "10.200.1.2/24"
   },
   { 
     name: "host-c", 
     prod_ip: "192.168.56.13", 
     mgmt_ip: "192.168.57.13",
     prod_net: "172.16.30.0/24",
-    mgmt_net: "10.200.30.0/24"
+    mgmt_net: "10.200.30.0/24",
+    br_prod_ip: "10.100.0.3/24",
+    br_mgmt_ip: "10.200.1.3/24"
   },
 ]
 
@@ -140,7 +146,9 @@ overlays:
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-prod"
+    bridge:
+      name: "br-prod"
+      ipv4: "#{node[:br_prod_ip]}"
     underlay_interface: "enp0s8"
     routing:
       export:
@@ -159,7 +167,9 @@ overlays:
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-mgmt"
+    bridge:
+      name: "br-mgmt"
+      ipv4: "#{node[:br_mgmt_ip]}"
     underlay_interface: "enp0s9"
     routing:
       export:

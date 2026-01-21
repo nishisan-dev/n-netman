@@ -181,3 +181,37 @@ func (m *BridgeManager) RemoveInterface(ifaceName string) error {
 
 	return nil
 }
+
+// AddAddress adds an IP address to a bridge interface.
+// The address should be in CIDR format, e.g. "10.100.0.1/24".
+func (m *BridgeManager) AddAddress(bridgeName, cidr string) error {
+	link, err := netlink.LinkByName(bridgeName)
+	if err != nil {
+		return fmt.Errorf("bridge %s not found: %w", bridgeName, err)
+	}
+
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return fmt.Errorf("invalid address %s: %w", cidr, err)
+	}
+
+	// Check if address already exists
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+	if err != nil {
+		return fmt.Errorf("failed to list addresses on %s: %w", bridgeName, err)
+	}
+
+	for _, a := range addrs {
+		if a.IPNet.String() == addr.IPNet.String() {
+			// Address already exists
+			return nil
+		}
+	}
+
+	// Add the address
+	if err := netlink.AddrAdd(link, addr); err != nil {
+		return fmt.Errorf("failed to add address %s to %s: %w", cidr, bridgeName, err)
+	}
+
+	return nil
+}

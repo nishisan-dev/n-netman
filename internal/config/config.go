@@ -107,9 +107,36 @@ type OverlayDef struct {
 	DstPort           int            `yaml:"dstport" validate:"omitempty,min=1,max=65535"`
 	Learning          bool           `yaml:"learning"`
 	MTU               int            `yaml:"mtu" validate:"omitempty,min=1280,max=9000"`
-	Bridge            string         `yaml:"bridge" validate:"required"`
+	Bridge            BridgeConfig   `yaml:"bridge" validate:"required"`
 	UnderlayInterface string         `yaml:"underlay_interface"`
 	Routing           OverlayRouting `yaml:"routing"`
+}
+
+// BridgeConfig defines the bridge interface for an overlay.
+type BridgeConfig struct {
+	Name string `yaml:"name" validate:"required"`
+	IPv4 string `yaml:"ipv4,omitempty"` // CIDR format, e.g. "10.100.0.1/24"
+	IPv6 string `yaml:"ipv6,omitempty"` // CIDR format, e.g. "fd00:100::1/64"
+}
+
+// UnmarshalYAML implements custom unmarshaling to support both string and struct formats.
+// This provides backward compatibility: "bridge: br-prod" (string) or "bridge: {name: br-prod, ipv4: ...}" (struct)
+func (b *BridgeConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Try string first (legacy format)
+	var name string
+	if err := unmarshal(&name); err == nil && name != "" {
+		b.Name = name
+		return nil
+	}
+
+	// Try struct format (new format with IP)
+	type bridgeConfigAlias BridgeConfig // Alias to avoid infinite recursion
+	var alias bridgeConfigAlias
+	if err := unmarshal(&alias); err != nil {
+		return err
+	}
+	*b = BridgeConfig(alias)
+	return nil
 }
 
 // OverlayRouting defines routing policies specific to an overlay.
@@ -352,7 +379,7 @@ func (c *Config) GetOverlays() []OverlayDef {
 				DstPort:  c.Overlay.VXLAN.DstPort,
 				Learning: c.Overlay.VXLAN.Learning,
 				MTU:      c.Overlay.VXLAN.MTU,
-				Bridge:   c.Overlay.VXLAN.Bridge,
+				Bridge:   BridgeConfig{Name: c.Overlay.VXLAN.Bridge}, // Convert string to struct
 				Routing: OverlayRouting{
 					Export: c.Routing.Export,
 					Import: c.Routing.Import,

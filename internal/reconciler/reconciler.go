@@ -158,7 +158,7 @@ func (r *Reconciler) reconcileOverlay(ctx context.Context, overlay config.Overla
 
 // reconcileBridgeForOverlay ensures the bridge for an overlay exists and is configured correctly.
 func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay config.OverlayDef) error {
-	bridgeName := overlay.Bridge
+	bridgeName := overlay.Bridge.Name
 
 	// Check KVM config for bridge settings
 	var bridgeCfg *config.BridgeDef
@@ -202,6 +202,20 @@ func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay conf
 		}
 	}
 
+	// Add IP address to bridge if configured (for overlay routing)
+	if overlay.Bridge.IPv4 != "" {
+		r.logger.Debug("adding IPv4 address to bridge", "bridge", bridgeName, "address", overlay.Bridge.IPv4)
+		if err := r.bridge.AddAddress(bridgeName, overlay.Bridge.IPv4); err != nil {
+			return fmt.Errorf("failed to add IPv4 to bridge %s: %w", bridgeName, err)
+		}
+	}
+	if overlay.Bridge.IPv6 != "" {
+		r.logger.Debug("adding IPv6 address to bridge", "bridge", bridgeName, "address", overlay.Bridge.IPv6)
+		if err := r.bridge.AddAddress(bridgeName, overlay.Bridge.IPv6); err != nil {
+			return fmt.Errorf("failed to add IPv6 to bridge %s: %w", bridgeName, err)
+		}
+	}
+
 	return nil
 }
 
@@ -231,7 +245,7 @@ func (r *Reconciler) reconcileVXLANForOverlay(ctx context.Context, overlay confi
 		LocalIP:  localIP,
 		MTU:      overlay.MTU,
 		Learning: overlay.Learning,
-		Bridge:   overlay.Bridge,
+		Bridge:   overlay.Bridge.Name,
 	}
 
 	if err := r.vxlan.Create(cfg); err != nil {

@@ -176,9 +176,9 @@ func statusCmd() *cobra.Command {
 			fmt.Println("─────────────────────────────────────────")
 
 			for _, o := range overlays {
-				bridgeInfo, err := bridgeMgr.Get(o.Bridge)
+				bridgeInfo, err := bridgeMgr.Get(o.Bridge.Name)
 				if err != nil {
-					fmt.Printf("  ❌ %s: not found\n", o.Bridge)
+					fmt.Printf("  ❌ %s: not found\n", o.Bridge.Name)
 				} else {
 					status := "🔴 DOWN"
 					if bridgeInfo.Up {
