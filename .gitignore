@@ -41,3 +41,6 @@ dist/
 # Debug
 __debug_bin*
 .vagrant/
+
+# Build artifacts
+bin/
