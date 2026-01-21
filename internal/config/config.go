@@ -5,12 +5,13 @@ import "time"
 
 // Config is the root configuration structure for n-netman.
 type Config struct {
-	Version       int            `yaml:"version" validate:"required,eq=1"`
+	Version       int            `yaml:"version" validate:"required,min=1,max=2"`
 	Node          NodeConfig     `yaml:"node" validate:"required"`
 	Netplan       NetplanConfig  `yaml:"netplan"`
 	KVM           KVMConfig      `yaml:"kvm"`
-	Overlay       OverlayConfig  `yaml:"overlay" validate:"required"`
-	Routing       RoutingConfig  `yaml:"routing"`
+	Overlay       OverlayConfig  `yaml:"overlay"`  // Legado (v1)
+	Overlays      []OverlayDef   `yaml:"overlays"` // Novo (v2)
+	Routing       RoutingConfig  `yaml:"routing"`  // Global fallback
 	Topology      TopologyConfig `yaml:"topology"`
 	Security      SecurityConfig `yaml:"security"`
 	Observability ObsConfig      `yaml:"observability"`
@@ -25,9 +26,9 @@ type NodeConfig struct {
 
 // NetplanConfig defines integration with netplan for underlay inference.
 type NetplanConfig struct {
-	Enabled     bool            `yaml:"enabled"`
-	ConfigPaths []string        `yaml:"config_paths"`
-	Underlay    UnderlayConfig  `yaml:"underlay"`
+	Enabled     bool           `yaml:"enabled"`
+	ConfigPaths []string       `yaml:"config_paths"`
+	Underlay    UnderlayConfig `yaml:"underlay"`
 }
 
 // UnderlayConfig defines preferences for underlay interface selection.
@@ -69,9 +70,9 @@ type BridgeDef struct {
 
 // AttachConfig defines VM attachment settings.
 type AttachConfig struct {
-	Enabled  bool            `yaml:"enabled"`
-	Strategy string          `yaml:"strategy" validate:"omitempty,oneof=by-name by-tag regex"`
-	Targets  []AttachTarget  `yaml:"targets"`
+	Enabled  bool           `yaml:"enabled"`
+	Strategy string         `yaml:"strategy" validate:"omitempty,oneof=by-name by-tag regex"`
+	Targets  []AttachTarget `yaml:"targets"`
 }
 
 // AttachTarget defines a VM to bridge mapping.
@@ -88,13 +89,33 @@ type OverlayConfig struct {
 }
 
 // VXLANConfig defines VXLAN tunnel settings.
+// Note: required validation is done in validateSemantics based on config version.
 type VXLANConfig struct {
-	VNI      int    `yaml:"vni" validate:"required,min=1,max=16777215"`
-	Name     string `yaml:"name" validate:"required"`
+	VNI      int    `yaml:"vni" validate:"omitempty,min=1,max=16777215"`
+	Name     string `yaml:"name"`
 	DstPort  int    `yaml:"dstport" validate:"omitempty,min=1,max=65535"`
 	Learning bool   `yaml:"learning"`
 	MTU      int    `yaml:"mtu" validate:"omitempty,min=1280,max=9000"`
-	Bridge   string `yaml:"bridge" validate:"required"`
+	Bridge   string `yaml:"bridge"`
+}
+
+// OverlayDef defines a complete overlay with its own routing context.
+// This is used in v2 multi-overlay configs.
+type OverlayDef struct {
+	VNI               int            `yaml:"vni" validate:"required,min=1,max=16777215"`
+	Name              string         `yaml:"name" validate:"required"`
+	DstPort           int            `yaml:"dstport" validate:"omitempty,min=1,max=65535"`
+	Learning          bool           `yaml:"learning"`
+	MTU               int            `yaml:"mtu" validate:"omitempty,min=1280,max=9000"`
+	Bridge            string         `yaml:"bridge" validate:"required"`
+	UnderlayInterface string         `yaml:"underlay_interface"`
+	Routing           OverlayRouting `yaml:"routing"`
+}
+
+// OverlayRouting defines routing policies specific to an overlay.
+type OverlayRouting struct {
+	Export ExportConfig `yaml:"export"`
+	Import ImportConfig `yaml:"import"`
 }
 
 // PeerConfig defines a remote peer for VXLAN overlay.
@@ -311,4 +332,40 @@ func (h *HealthConfig) DeadAfterDuration() time.Duration {
 		return 6000 * time.Millisecond
 	}
 	return time.Duration(h.DeadAfterMs) * time.Millisecond
+}
+
+// GetOverlays returns the list of overlay definitions.
+// For v1 configs with singular overlay, it converts to []OverlayDef format.
+// For v2 configs, it returns the Overlays slice directly.
+func (c *Config) GetOverlays() []OverlayDef {
+	// If v2 overlays are defined, use them directly
+	if len(c.Overlays) > 0 {
+		return c.Overlays
+	}
+
+	// Convert legacy v1 config to OverlayDef format
+	if c.Overlay.VXLAN.Name != "" {
+		return []OverlayDef{
+			{
+				VNI:      c.Overlay.VXLAN.VNI,
+				Name:     c.Overlay.VXLAN.Name,
+				DstPort:  c.Overlay.VXLAN.DstPort,
+				Learning: c.Overlay.VXLAN.Learning,
+				MTU:      c.Overlay.VXLAN.MTU,
+				Bridge:   c.Overlay.VXLAN.Bridge,
+				Routing: OverlayRouting{
+					Export: c.Routing.Export,
+					Import: c.Routing.Import,
+				},
+			},
+		}
+	}
+
+	return nil
+}
+
+// GetPeers returns the list of peers from the legacy config.
+// In v2, peers are referenced differently, but this maintains compatibility.
+func (c *Config) GetPeers() []PeerConfig {
+	return c.Overlay.Peers
 }

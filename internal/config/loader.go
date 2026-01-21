@@ -68,8 +68,40 @@ func (l *Loader) Validate(cfg *Config) error {
 
 // validateSemantics performs additional validation beyond struct tags.
 func (l *Loader) validateSemantics(cfg *Config) error {
+	// Validate overlay configuration based on version
+	if cfg.Version == 2 {
+		// V2: require overlays array
+		if len(cfg.Overlays) == 0 {
+			return fmt.Errorf("v2 config requires at least one overlay in 'overlays' array")
+		}
+		// Validate each overlay
+		for i, o := range cfg.Overlays {
+			if o.VNI == 0 {
+				return fmt.Errorf("overlay[%d]: vni is required", i)
+			}
+			if o.Name == "" {
+				return fmt.Errorf("overlay[%d]: name is required", i)
+			}
+			if o.Bridge == "" {
+				return fmt.Errorf("overlay[%d]: bridge is required", i)
+			}
+		}
+	} else {
+		// V1: require legacy overlay.vxlan
+		if cfg.Overlay.VXLAN.Name == "" {
+			return fmt.Errorf("v1 config requires overlay.vxlan.name")
+		}
+		if cfg.Overlay.VXLAN.VNI == 0 {
+			return fmt.Errorf("v1 config requires overlay.vxlan.vni")
+		}
+		if cfg.Overlay.VXLAN.Bridge == "" {
+			return fmt.Errorf("v1 config requires overlay.vxlan.bridge")
+		}
+	}
+
 	// Validate VXLAN bridge reference exists in KVM bridges (if KVM enabled)
-	if cfg.KVM.Enabled && len(cfg.KVM.Bridges) > 0 {
+	// Only for v1 configs - v2 would need to check each overlay
+	if cfg.Version == 1 && cfg.KVM.Enabled && len(cfg.KVM.Bridges) > 0 {
 		bridgeName := cfg.Overlay.VXLAN.Bridge
 		found := false
 		for _, b := range cfg.KVM.Bridges {
@@ -81,16 +113,6 @@ func (l *Loader) validateSemantics(cfg *Config) error {
 		if !found {
 			return fmt.Errorf("vxlan.bridge %q not found in kvm.bridges", bridgeName)
 		}
-	}
-
-	// Validate at least one peer is defined (warning only)
-	if len(cfg.Overlay.Peers) == 0 {
-		// This is fine for initial setup, just a warning
-	}
-
-	// Validate routing policies don't overlap
-	if cfg.Routing.Import.AcceptAll && len(cfg.Routing.Import.Deny) > 0 {
-		// accept_all with deny list is valid (accept all except denied)
 	}
 
 	return nil

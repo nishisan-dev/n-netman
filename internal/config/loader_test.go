@@ -258,3 +258,142 @@ observability:
 		t.Errorf("expected 2 export networks, got %d", len(cfg.Routing.Export.Networks))
 	}
 }
+
+func TestLoader_Load_MultiOverlayV2(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "vxlan-prod"
+    bridge: "br-prod"
+    underlay_interface: "ens3"
+    routing:
+      export:
+        networks:
+          - "172.16.0.0/16"
+      import:
+        install:
+          table: 100
+  - vni: 200
+    name: "vxlan-mgmt"
+    bridge: "br-mgmt"
+    underlay_interface: "ens4"
+    routing:
+      export:
+        networks:
+          - "10.200.0.0/16"
+      import:
+        install:
+          table: 200
+`
+	loader := NewLoader()
+	cfg, err := loader.Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("expected no error for v2 multi-overlay, got: %v", err)
+	}
+
+	if cfg.Version != 2 {
+		t.Errorf("expected version = 2, got %d", cfg.Version)
+	}
+
+	if len(cfg.Overlays) != 2 {
+		t.Fatalf("expected 2 overlays, got %d", len(cfg.Overlays))
+	}
+
+	// Check first overlay
+	if cfg.Overlays[0].VNI != 100 {
+		t.Errorf("expected overlay[0].vni = 100, got %d", cfg.Overlays[0].VNI)
+	}
+	if cfg.Overlays[0].UnderlayInterface != "ens3" {
+		t.Errorf("expected overlay[0].underlay_interface = 'ens3', got '%s'", cfg.Overlays[0].UnderlayInterface)
+	}
+	if cfg.Overlays[0].Routing.Import.Install.Table != 100 {
+		t.Errorf("expected table = 100, got %d", cfg.Overlays[0].Routing.Import.Install.Table)
+	}
+
+	// Check second overlay
+	if cfg.Overlays[1].VNI != 200 {
+		t.Errorf("expected overlay[1].vni = 200, got %d", cfg.Overlays[1].VNI)
+	}
+}
+
+func TestConfig_GetOverlays_V2(t *testing.T) {
+	cfg := &Config{
+		Version: 2,
+		Overlays: []OverlayDef{
+			{VNI: 100, Name: "vxlan100", Bridge: "br-100"},
+			{VNI: 200, Name: "vxlan200", Bridge: "br-200"},
+		},
+	}
+
+	overlays := cfg.GetOverlays()
+	if len(overlays) != 2 {
+		t.Fatalf("expected 2 overlays, got %d", len(overlays))
+	}
+
+	if overlays[0].VNI != 100 || overlays[1].VNI != 200 {
+		t.Errorf("unexpected VNIs: got %d and %d", overlays[0].VNI, overlays[1].VNI)
+	}
+}
+
+func TestConfig_GetOverlays_V1Compatibility(t *testing.T) {
+	cfg := &Config{
+		Version: 1,
+		Overlay: OverlayConfig{
+			VXLAN: VXLANConfig{
+				VNI:      100,
+				Name:     "vxlan100",
+				DstPort:  4789,
+				Learning: true,
+				MTU:      1450,
+				Bridge:   "br-nnet-100",
+			},
+		},
+		Routing: RoutingConfig{
+			Export: ExportConfig{
+				Networks: []string{"172.16.10.0/24"},
+				Metric:   100,
+			},
+			Import: ImportConfig{
+				Install: InstallConfig{
+					Table: 100,
+				},
+			},
+		},
+	}
+
+	overlays := cfg.GetOverlays()
+	if len(overlays) != 1 {
+		t.Fatalf("expected 1 overlay from v1 conversion, got %d", len(overlays))
+	}
+
+	o := overlays[0]
+	if o.VNI != 100 {
+		t.Errorf("expected VNI = 100, got %d", o.VNI)
+	}
+	if o.Name != "vxlan100" {
+		t.Errorf("expected Name = 'vxlan100', got '%s'", o.Name)
+	}
+	if o.Bridge != "br-nnet-100" {
+		t.Errorf("expected Bridge = 'br-nnet-100', got '%s'", o.Bridge)
+	}
+
+	// Verify routing was migrated
+	if len(o.Routing.Export.Networks) != 1 {
+		t.Errorf("expected 1 export network, got %d", len(o.Routing.Export.Networks))
+	}
+	if o.Routing.Import.Install.Table != 100 {
+		t.Errorf("expected import table = 100, got %d", o.Routing.Import.Install.Table)
+	}
+}
+
+func TestConfig_GetOverlays_EmptyConfig(t *testing.T) {
+	cfg := &Config{}
+
+	overlays := cfg.GetOverlays()
+	if overlays != nil {
+		t.Errorf("expected nil for empty config, got %v", overlays)
+	}
+}
