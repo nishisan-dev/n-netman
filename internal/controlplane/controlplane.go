@@ -27,6 +27,7 @@ type Route struct {
 	Metric       uint32
 	LeaseSeconds uint32
 	Tags         []string
+	VNI          uint32 // Overlay VNI this route belongs to
 	ReceivedAt   time.Time
 	ExpiresAt    time.Time
 	PeerID       string

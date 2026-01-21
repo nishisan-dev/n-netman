@@ -27,6 +27,7 @@ func NewManager(cfg *config.Config) *Manager {
 
 // GetExportRoutes returns the routes that should be exported according to policy.
 // Currently, it only includes explicit config networks.
+// DEPRECATED: Use GetExportRoutesForOverlay for multi-overlay support.
 func (m *Manager) GetExportRoutes() []controlplane.Route {
 	m.mu.RLock()
 	if len(m.exportedRoutes) > 0 {
@@ -65,7 +66,32 @@ func (m *Manager) GetExportRoutes() []controlplane.Route {
 	return routes
 }
 
+// GetExportRoutesForOverlay returns the routes that should be exported for a specific overlay.
+// Each overlay has its own export policy defined in overlay.Routing.Export.
+func (m *Manager) GetExportRoutesForOverlay(overlay config.OverlayDef) []controlplane.Route {
+	var routes []controlplane.Route
+
+	exportCfg := overlay.Routing.Export
+	metric := uint32(exportCfg.Metric)
+	if metric == 0 {
+		metric = 100
+	}
+
+	// Add explicitly configured networks for this overlay
+	for _, network := range exportCfg.Networks {
+		routes = append(routes, controlplane.Route{
+			Prefix: network,
+			Metric: metric,
+			VNI:    uint32(overlay.VNI),
+			// NextHop will be set based on overlay bridge IP
+		})
+	}
+
+	return routes
+}
+
 // ShouldImport checks if a route should be imported according to policy.
+// DEPRECATED: Use ShouldImportForOverlay for multi-overlay support.
 func (m *Manager) ShouldImport(route controlplane.Route) bool {
 	importCfg := m.cfg.Routing.Import
 
@@ -95,6 +121,48 @@ func (m *Manager) ShouldImport(route controlplane.Route) bool {
 	}
 
 	return false
+}
+
+// ShouldImportForOverlay checks if a route should be imported for a specific overlay.
+// Each overlay has its own import policy defined in overlay.Routing.Import.
+func (m *Manager) ShouldImportForOverlay(route controlplane.Route, overlay config.OverlayDef) bool {
+	importCfg := overlay.Routing.Import
+
+	// Parse the route's prefix
+	_, routeNet, err := net.ParseCIDR(route.Prefix)
+	if err != nil {
+		return false
+	}
+
+	// Check deny list first (deny takes precedence)
+	for _, denyPrefix := range importCfg.Deny {
+		if matchesPrefix(routeNet, denyPrefix) {
+			return false
+		}
+	}
+
+	// If accept_all is true, accept (unless denied above)
+	if importCfg.AcceptAll {
+		return true
+	}
+
+	// Check allow list
+	for _, allowPrefix := range importCfg.Allow {
+		if matchesPrefix(routeNet, allowPrefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// GetImportTableForOverlay returns the routing table number for installing routes from an overlay.
+func (m *Manager) GetImportTableForOverlay(overlay config.OverlayDef) int {
+	table := overlay.Routing.Import.Install.Table
+	if table == 0 {
+		return 100 // default
+	}
+	return table
 }
 
 // matchesPrefix checks if a route network matches a policy prefix.
