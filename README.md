@@ -1,7 +1,7 @@
 # n-netman — Nishi Network Manager
 
 [![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Nishi--NC-orange.svg)](LICENSE)
 
 **n-netman** é um agente leve para criação e gerenciamento de **overlays VXLAN L3/L2** entre hosts Linux rodando KVM/libvirt.
 
@@ -772,7 +772,9 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 
 ## 📜 Licença
 
-MIT License - veja [LICENSE](LICENSE) para detalhes.
+Nishi Network Manager License (Non-Commercial Evaluation) - veja [LICENSE](LICENSE) para detalhes.
+
+> **Nota:** Uso comercial requer licença separada. Contate o Licensor para mais informações.
 
 ---
 
