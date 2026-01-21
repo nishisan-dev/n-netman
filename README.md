@@ -21,6 +21,7 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
 - ✅ **Estatísticas de rotas** (exported, installed, per-peer)
 - ✅ **Cleanup automático** de rotas no shutdown e quando peers caem (`flush_on_peer_down`)
+- ✅ **Multi-Overlay (v2)** — Suporte a múltiplos VXLANs com routing independente por VNI
 
 ### Em progresso
 
@@ -217,6 +218,64 @@ openssl rand -hex 32 | sudo tee /etc/n-netman/psk/host-b-01.key
 sudo chmod 600 /etc/n-netman/psk/*.key
 ```
 
+### Multi-Overlay (Config v2) 🆕
+
+A partir da versão 2 do config, você pode definir múltiplos overlays VXLAN, cada um com seu próprio routing:
+
+```yaml
+version: 2
+
+node:
+  id: "host-a"
+  hostname: "host-a"
+
+overlays:
+  # Production Overlay (VNI 100)
+  - vni: 100
+    name: "vxlan-prod"
+    dstport: 4789
+    mtu: 1450
+    learning: true
+    bridge: "br-prod"
+    underlay_interface: "ens3"    # Interface física para este overlay
+    routing:
+      export:
+        networks:
+          - "172.16.10.0/24"
+        metric: 100
+      import:
+        accept_all: true
+        install:
+          table: 100
+
+  # Management Overlay (VNI 200)
+  - vni: 200
+    name: "vxlan-mgmt"
+    dstport: 4789
+    mtu: 1450
+    learning: true
+    bridge: "br-mgmt"
+    underlay_interface: "ens4"
+    routing:
+      export:
+        networks:
+          - "10.200.0.0/24"
+        metric: 200
+      import:
+        accept_all: true
+        install:
+          table: 200
+
+# Peers (shared across overlays)
+overlay:
+  peers:
+    - id: "host-b"
+      endpoint:
+        address: "192.168.56.12"
+```
+
+Veja o exemplo completo em [`examples/multi-overlay.yaml`](examples/multi-overlay.yaml).
+
 ---
 
 ## 🎮 Uso
@@ -313,20 +372,26 @@ sudo systemctl status n-netman
 
 ## 🧪 Lab Testing (Vagrant)
 
-O projeto inclui um `Vagrantfile` para testar a troca de rotas em um ambiente com 3 VMs.
+O projeto inclui um `Vagrantfile` para testar multi-overlay em um ambiente com 3 VMs.
 
-### Topologia do Lab
+### Topologia do Lab (Multi-Overlay)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Underlay: 192.168.56.0/24                  │
-├───────────────────┬──────────────────┬──────────────────────┤
-│     host-a        │     host-b       │      host-c          │
-│  192.168.56.11    │  192.168.56.12   │   192.168.56.13      │
-│                   │                  │                      │
-│ Overlay:          │ Overlay:         │ Overlay:             │
-│ 172.16.10.0/24    │ 172.16.20.0/24   │ 172.16.30.0/24       │
-└───────────────────┴──────────────────┴──────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                           Underlay Networks                                   │
+├───────────────────────────────────────────────────────────────────────────────┤
+│    Production: 192.168.56.0/24    │    Management: 192.168.57.0/24           │
+├───────────────────┬───────────────┴─────┬─────────────────────────────────────┤
+│     host-a        │       host-b        │        host-c                       │
+│  Prod: .56.11     │    Prod: .56.12     │     Prod: .56.13                    │
+│  Mgmt: .57.11     │    Mgmt: .57.12     │     Mgmt: .57.13                    │
+│                   │                     │                                     │
+│ VNI 100 (Prod):   │ VNI 100 (Prod):     │ VNI 100 (Prod):                     │
+│ 172.16.10.0/24    │ 172.16.20.0/24      │ 172.16.30.0/24                      │
+│                   │                     │                                     │
+│ VNI 200 (Mgmt):   │ VNI 200 (Mgmt):     │ VNI 200 (Mgmt):                     │
+│ 10.200.10.0/24    │ 10.200.20.0/24      │ 10.200.30.0/24                      │
+└───────────────────┴─────────────────────┴─────────────────────────────────────┘
 ```
 
 ### Requisitos
@@ -530,11 +595,11 @@ cloud "Peer Nodes" {
 @enduml
 ```
 
-### Fluxo de Reconciliação
+### Fluxo de Reconciliação (Multi-Overlay)
 
 ```plantuml
 @startuml
-title Reconciler Loop
+title Reconciler Loop (Multi-Overlay)
 
 participant "Config" as C
 participant "Reconciler" as R
@@ -544,24 +609,27 @@ participant "FDBManager" as FM
 participant "Linux Kernel" as K
 
 loop Every 10 seconds
-    R -> C: Read desired state
+    R -> C: GetOverlays()
+    C --> R: []OverlayDef
     
-    R -> BM: Ensure bridge exists
-    BM -> K: netlink: create/update bridge
-    K --> BM: OK
-    
-    R -> VM: Ensure VXLAN exists
-    VM -> K: netlink: create/update vxlan
-    K --> VM: OK
-    
-    VM -> BM: Attach VXLAN to bridge
-    BM -> K: netlink: set master
-    K --> BM: OK
-    
-    R -> FM: Sync FDB entries
-    loop For each peer
-        FM -> K: netlink: add FDB entry
-        K --> FM: OK
+    loop For each overlay (VNI 100, 200, ...)
+        R -> BM: Ensure bridge exists (br-prod, br-mgmt)
+        BM -> K: netlink: create/update bridge
+        K --> BM: OK
+        
+        R -> VM: Ensure VXLAN exists (vxlan-prod, vxlan-mgmt)
+        VM -> K: netlink: create/update vxlan
+        K --> VM: OK
+        
+        VM -> BM: Attach VXLAN to bridge
+        BM -> K: netlink: set master
+        K --> BM: OK
+        
+        R -> FM: Sync FDB entries for overlay
+        loop For each peer
+            FM -> K: netlink: add FDB entry
+            K --> FM: OK
+        end
     end
     
     R -> R: Sleep 10s
