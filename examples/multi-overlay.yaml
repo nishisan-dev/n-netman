@@ -23,7 +23,9 @@ overlays:
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-prod"
+    bridge:
+      name: "br-prod"
+      ipv4: "10.100.0.1/24"
     underlay_interface: "ens3"
     routing:
       export:
@@ -49,7 +51,9 @@ overlays:
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-mgmt"
+    bridge:
+      name: "br-mgmt"
+      ipv4: "10.200.1.1/24"
     underlay_interface: "ens4"
     routing:
       export:

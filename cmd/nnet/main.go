@@ -184,7 +184,12 @@ func statusCmd() *cobra.Command {
 					if bridgeInfo.Up {
 						status = "🟢 UP"
 					}
-					fmt.Printf("  %s %s (MTU %d)\n", status, bridgeInfo.Name, bridgeInfo.MTU)
+					// Show bridge with configured IP if present
+					if o.Bridge.IPv4 != "" {
+						fmt.Printf("  %s %s (MTU %d, IP %s)\n", status, bridgeInfo.Name, bridgeInfo.MTU, o.Bridge.IPv4)
+					} else {
+						fmt.Printf("  %s %s (MTU %d)\n", status, bridgeInfo.Name, bridgeInfo.MTU)
+					}
 					if len(bridgeInfo.AttachedInterfaces) > 0 {
 						fmt.Printf("      Attached: %v\n", bridgeInfo.AttachedInterfaces)
 					}
