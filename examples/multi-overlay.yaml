@@ -1,0 +1,107 @@
+# n-netman Multi-Overlay Configuration Example (v2)
+#
+# This example demonstrates configuring multiple VXLAN overlays
+# with independent routing policies for each.
+#
+# Scenario:
+#   - VNI 100: Production traffic via ens3
+#   - VNI 200: Management traffic via ens4
+
+version: 2
+
+node:
+  id: "example-node"
+  hostname: "example-node"
+  tags:
+    - "example"
+    - "multi-overlay"
+
+overlays:
+  # Production Overlay (VNI 100)
+  - vni: 100
+    name: "vxlan-prod"
+    dstport: 4789
+    mtu: 1450
+    learning: true
+    bridge: "br-prod"
+    underlay_interface: "ens3"
+    routing:
+      export:
+        networks:
+          - "172.16.10.0/24"
+          - "2001:db8:10::/64"
+        include_connected: true
+        metric: 100
+      import:
+        accept_all: false
+        allow:
+          - "172.16.0.0/16"
+        deny:
+          - "0.0.0.0/0"
+        install:
+          table: 100
+          flush_on_peer_down: true
+          route_lease_seconds: 30
+
+  # Management Overlay (VNI 200)
+  - vni: 200
+    name: "vxlan-mgmt"
+    dstport: 4789
+    mtu: 1450
+    learning: true
+    bridge: "br-mgmt"
+    underlay_interface: "ens4"
+    routing:
+      export:
+        networks:
+          - "10.200.0.0/24"
+        metric: 200
+      import:
+        accept_all: true
+        install:
+          table: 200
+          flush_on_peer_down: true
+          route_lease_seconds: 60
+
+# Peer configuration (shared across overlays)
+overlay:
+  peers:
+    - id: "peer-01"
+      endpoint:
+        address: "192.168.1.10"
+      health:
+        keepalive_interval_ms: 1500
+        dead_after_ms: 6000
+
+    - id: "peer-02"
+      endpoint:
+        address: "192.168.1.11"
+      health:
+        keepalive_interval_ms: 1500
+        dead_after_ms: 6000
+
+topology:
+  mode: "direct-preferred"
+  transit: "deny"
+
+security:
+  control_plane:
+    transport: "grpc"
+    listen:
+      address: "0.0.0.0"
+      port: 9898
+
+observability:
+  logging:
+    level: "info"
+    format: "json"
+  metrics:
+    enabled: true
+    listen:
+      address: "0.0.0.0"
+      port: 9109
+  healthcheck:
+    enabled: true
+    listen:
+      address: "0.0.0.0"
+      port: 9110

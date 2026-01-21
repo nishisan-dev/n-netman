@@ -1,21 +1,38 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
-# n-netman Lab - 3 VMs para testar overlay VXLAN
+# n-netman Lab - 3 VMs para testar multi-overlay VXLAN
 #
 # Uso:
 #   vagrant up
 #   vagrant ssh host-a
 #
-# Rede underlay: 192.168.56.0/24 (VirtualBox host-only)
-#   host-a: 192.168.56.11
-#   host-b: 192.168.56.12
-#   host-c: 192.168.56.13
+# Redes underlay:
+#   Produção:   192.168.56.0/24 (VirtualBox host-only)
+#   Management: 192.168.57.0/24 (VirtualBox host-only)
 
 NODES = [
-  { name: "host-a", ip: "192.168.56.11", overlay_net: "172.16.10.0/24" },
-  { name: "host-b", ip: "192.168.56.12", overlay_net: "172.16.20.0/24" },
-  { name: "host-c", ip: "192.168.56.13", overlay_net: "172.16.30.0/24" },
+  { 
+    name: "host-a", 
+    prod_ip: "192.168.56.11", 
+    mgmt_ip: "192.168.57.11",
+    prod_net: "172.16.10.0/24",   # Overlay network for production
+    mgmt_net: "10.200.10.0/24"    # Overlay network for management
+  },
+  { 
+    name: "host-b", 
+    prod_ip: "192.168.56.12", 
+    mgmt_ip: "192.168.57.12",
+    prod_net: "172.16.20.0/24",
+    mgmt_net: "10.200.20.0/24"
+  },
+  { 
+    name: "host-c", 
+    prod_ip: "192.168.56.13", 
+    mgmt_ip: "192.168.57.13",
+    prod_net: "172.16.30.0/24",
+    mgmt_net: "10.200.30.0/24"
+  },
 ]
 
 Vagrant.configure("2") do |config|
@@ -33,8 +50,11 @@ Vagrant.configure("2") do |config|
     config.vm.define node[:name] do |vm|
       vm.vm.hostname = node[:name]
       
-      # Rede host-only para underlay
-      vm.vm.network "private_network", ip: node[:ip]
+      # Rede 1: Produção (underlay for VNI 100)
+      vm.vm.network "private_network", ip: node[:prod_ip]
+      
+      # Rede 2: Management (underlay for VNI 200)
+      vm.vm.network "private_network", ip: node[:mgmt_ip]
 
       # Provisioning: instalar Go e compilar n-netman
       vm.vm.provision "shell", inline: <<-SHELL
@@ -93,7 +113,7 @@ def generate_config(node, all_nodes)
     <<-PEER
     - id: "#{p[:name]}"
       endpoint:
-        address: "#{p[:ip]}"
+        address: "#{p[:prod_ip]}"
       health:
         keepalive_interval_ms: 1500
         dead_after_ms: 6000
@@ -102,38 +122,61 @@ def generate_config(node, all_nodes)
 
   <<-SHELL
 cat > /etc/n-netman/n-netman.yaml << 'EOF'
-version: 1
+version: 2
 
 node:
   id: "#{node[:name]}"
   hostname: "#{node[:name]}"
   tags:
     - "vagrant-lab"
+    - "multi-overlay"
 
-overlay:
-  vxlan:
-    vni: 100
-    name: "vxlan100"
+# Multi-Overlay Configuration (v2)
+# VNI 100: Production (via eth1/enp0s8)
+# VNI 200: Management (via eth2/enp0s9)
+overlays:
+  - vni: 100
+    name: "vxlan-prod"
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-nnet-100"
+    bridge: "br-prod"
+    underlay_interface: "enp0s8"
+    routing:
+      export:
+        networks:
+          - "#{node[:prod_net]}"
+        metric: 100
+      import:
+        accept_all: true
+        install:
+          table: 100
+          flush_on_peer_down: true
+          route_lease_seconds: 30
 
+  - vni: 200
+    name: "vxlan-mgmt"
+    dstport: 4789
+    mtu: 1450
+    learning: true
+    bridge: "br-mgmt"
+    underlay_interface: "enp0s9"
+    routing:
+      export:
+        networks:
+          - "#{node[:mgmt_net]}"
+        metric: 200
+      import:
+        accept_all: true
+        install:
+          table: 200
+          flush_on_peer_down: true
+          route_lease_seconds: 30
+
+# Legacy peers section (required for FDB sync)
+overlay:
   peers:
 #{peers_yaml}
-
-routing:
-  enabled: true
-  export:
-    networks:
-      - "#{node[:overlay_net]}"
-    metric: 100
-  import:
-    accept_all: true
-    install:
-      table: 100
-      flush_on_peer_down: true
-      route_lease_seconds: 30
 
 topology:
   mode: "direct-preferred"
@@ -162,7 +205,8 @@ observability:
       port: 9110
 EOF
 
-echo "Config gerada para #{node[:name]}"
+echo "Config v2 multi-overlay gerada para #{node[:name]}"
 cat /etc/n-netman/n-netman.yaml
   SHELL
 end
+
