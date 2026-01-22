@@ -811,6 +811,18 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 
 ---
 
+## 🐛 Known Issues
+
+### FDB Entries via Netlink Library
+
+A biblioteca Go `vishvananda/netlink` possui um bug conhecido onde `NeighAppend()` retorna "operation not supported" ao adicionar entradas FDB em interfaces VXLAN que estão attached a uma bridge.
+
+**Workaround implementado:** Utilizamos `exec.Command("bridge", "fdb", "append", ...)` diretamente ao invés da API da biblioteca.
+
+**Referência:** [vishvananda/netlink#714](https://github.com/vishvananda/netlink/issues/714)
+
+---
+
 ## 📜 Licença
 
 Nishi Network Manager License (Non-Commercial Evaluation) - veja [LICENSE](LICENSE) para detalhes.
