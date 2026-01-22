@@ -86,8 +86,27 @@ Vagrant.configure("2") do |config|
         echo "vxlan" >> /etc/modules
         echo "bridge" >> /etc/modules
 
-        # Criar diretório de config
-        mkdir -p /etc/n-netman
+        # Criar diretório de config e TLS
+        mkdir -p /etc/n-netman/tls
+      SHELL
+
+      # Gerar certificados TLS uma vez (no primeiro host) e copiar para todos
+      vm.vm.provision "shell", inline: <<-SHELL
+        set -e
+        cd /home/vagrant/n-netman
+        
+        # Gerar certificados se não existirem
+        if [ ! -f /tmp/n-netman-certs/ca.crt ]; then
+          ./scripts/gen-certs.sh /tmp/n-netman-certs "host-a host-b host-c"
+        fi
+        
+        # Copiar certificados para este host
+        cp /tmp/n-netman-certs/ca.crt /etc/n-netman/tls/
+        cp /tmp/n-netman-certs/#{node[:name]}.crt /etc/n-netman/tls/server.crt
+        cp /tmp/n-netman-certs/#{node[:name]}.key /etc/n-netman/tls/server.key
+        chmod 600 /etc/n-netman/tls/server.key
+        
+        echo "Certificados TLS instalados para #{node[:name]}"
       SHELL
 
       # Copiar código fonte (synced folder)
@@ -198,6 +217,11 @@ security:
     listen:
       address: "0.0.0.0"
       port: 9898
+    tls:
+      enabled: true
+      cert_file: "/etc/n-netman/tls/server.crt"
+      key_file: "/etc/n-netman/tls/server.key"
+      ca_file: "/etc/n-netman/tls/ca.crt"
 
 observability:
   logging:
