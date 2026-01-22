@@ -91,12 +91,13 @@ type OverlayConfig struct {
 // VXLANConfig defines VXLAN tunnel settings.
 // Note: required validation is done in validateSemantics based on config version.
 type VXLANConfig struct {
-	VNI      int    `yaml:"vni" validate:"omitempty,min=1,max=16777215"`
-	Name     string `yaml:"name"`
-	DstPort  int    `yaml:"dstport" validate:"omitempty,min=1,max=65535"`
-	Learning bool   `yaml:"learning"`
-	MTU      int    `yaml:"mtu" validate:"omitempty,min=1280,max=9000"`
-	Bridge   string `yaml:"bridge"`
+	VNI      int       `yaml:"vni" validate:"omitempty,min=1,max=16777215"`
+	Name     string    `yaml:"name"`
+	DstPort  int       `yaml:"dstport" validate:"omitempty,min=1,max=65535"`
+	Learning bool      `yaml:"learning"`
+	MTU      int       `yaml:"mtu" validate:"omitempty,min=1280,max=9000"`
+	Bridge   string    `yaml:"bridge"`
+	BUM      BUMConfig `yaml:"bum"`
 }
 
 // OverlayDef defines a complete overlay with its own routing context.
@@ -109,6 +110,7 @@ type OverlayDef struct {
 	MTU               int            `yaml:"mtu" validate:"omitempty,min=1280,max=9000"`
 	Bridge            BridgeConfig   `yaml:"bridge" validate:"required"`
 	UnderlayInterface string         `yaml:"underlay_interface"`
+	BUM               BUMConfig      `yaml:"bum"`
 	Routing           OverlayRouting `yaml:"routing"`
 }
 
@@ -137,6 +139,27 @@ func (b *BridgeConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	}
 	*b = BridgeConfig(alias)
 	return nil
+}
+
+// BUMConfig defines how BUM (Broadcast, Unknown Unicast, Multicast) traffic is handled.
+// This is critical for VXLAN operation as it determines how the kernel forwards
+// traffic to unknown destinations (e.g., ARP requests).
+type BUMConfig struct {
+	// Mode: "head-end-replication" (default) or "multicast"
+	// - head-end-replication: FDB entries with MAC 00:00:00:00:00:00 for each peer
+	// - multicast: Uses IP multicast group for BUM flooding
+	Mode string `yaml:"mode" validate:"omitempty,oneof=head-end-replication multicast"`
+	// Group: Multicast group IP address (only used when mode=multicast)
+	// Example: "239.1.1.100" for VNI 100
+	Group string `yaml:"group" validate:"omitempty,ip"`
+}
+
+// GetMode returns the BUM mode, defaulting to "head-end-replication" if not set.
+func (b *BUMConfig) GetMode() string {
+	if b.Mode == "" {
+		return "head-end-replication"
+	}
+	return b.Mode
 }
 
 // OverlayRouting defines routing policies specific to an overlay.
@@ -380,6 +403,7 @@ func (c *Config) GetOverlays() []OverlayDef {
 				Learning: c.Overlay.VXLAN.Learning,
 				MTU:      c.Overlay.VXLAN.MTU,
 				Bridge:   BridgeConfig{Name: c.Overlay.VXLAN.Bridge}, // Convert string to struct
+				BUM:      c.Overlay.VXLAN.BUM,                        // Propagate BUM config
 				Routing: OverlayRouting{
 					Export: c.Routing.Export,
 					Import: c.Routing.Import,

@@ -101,7 +101,7 @@ func (m *FDBManager) List(vxlanName string) ([]FDBEntry, error) {
 	var entries []FDBEntry
 	for _, n := range neighs {
 		// Filter to only FDB entries with IP addresses (VTEP destinations)
-		if n.IP != nil && len(n.IP) > 0 {
+		if len(n.IP) > 0 {
 			entries = append(entries, FDBEntry{
 				MAC:       n.HardwareAddr,
 				RemoteIP:  n.IP,

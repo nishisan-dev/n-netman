@@ -18,6 +18,7 @@ node:
 
 overlays:
   # Production Overlay (VNI 100)
+  # Uses head-end-replication (default) - FDB entries for each peer
   - vni: 100
     name: "vxlan-prod"
     dstport: 4789
@@ -27,6 +28,9 @@ overlays:
       name: "br-prod"
       ipv4: "10.100.0.1/24"
     underlay_interface: "ens3"
+    # BUM (Broadcast, Unknown Unicast, Multicast) traffic handling
+    bum:
+      mode: "head-end-replication"  # Default, can be omitted
     routing:
       export:
         networks:
@@ -46,6 +50,7 @@ overlays:
           route_lease_seconds: 30
 
   # Management Overlay (VNI 200)
+  # Uses multicast mode - requires multicast-enabled underlay
   - vni: 200
     name: "vxlan-mgmt"
     dstport: 4789
@@ -55,6 +60,10 @@ overlays:
       name: "br-mgmt"
       ipv4: "10.200.1.1/24"
     underlay_interface: "ens4"
+    # BUM via multicast group (requires underlay multicast support)
+    bum:
+      mode: "multicast"
+      group: "239.1.1.200"  # Convention: 239.1.1.<vni % 256>
     routing:
       export:
         networks:

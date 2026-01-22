@@ -19,13 +19,15 @@ func NewVXLANManager() *VXLANManager {
 
 // VXLANConfig defines the configuration for a VXLAN interface.
 type VXLANConfig struct {
-	Name       string   // Interface name (e.g., "vxlan100")
-	VNI        int      // VXLAN Network Identifier
-	DstPort    int      // Destination UDP port (default 4789)
-	LocalIP    net.IP   // Local underlay IP for VXLAN tunnel
-	MTU        int      // MTU for the interface
-	Learning   bool     // Enable MAC learning
-	Bridge     string   // Bridge to attach to (optional)
+	Name     string // Interface name (e.g., "vxlan100")
+	VNI      int    // VXLAN Network Identifier
+	DstPort  int    // Destination UDP port (default 4789)
+	LocalIP  net.IP // Local underlay IP for VXLAN tunnel
+	MTU      int    // MTU for the interface
+	Learning bool   // Enable MAC learning
+	Bridge   string // Bridge to attach to (optional)
+	Group    net.IP // Multicast group for BUM traffic (optional, for multicast mode)
+	VtepDev  string // Underlay interface name for VTEP (optional, improves routing)
 }
 
 // Create creates a new VXLAN interface.
@@ -68,6 +70,18 @@ func (m *VXLANManager) Create(cfg VXLANConfig) error {
 	// Set source IP if provided
 	if cfg.LocalIP != nil {
 		vxlan.SrcAddr = cfg.LocalIP
+	}
+
+	// Set multicast group for BUM traffic if provided
+	if cfg.Group != nil {
+		vxlan.Group = cfg.Group
+	}
+
+	// Set VTEP device index if provided (helps kernel route encapsulated packets)
+	if cfg.VtepDev != "" {
+		if vtepLink, err := netlink.LinkByName(cfg.VtepDev); err == nil {
+			vxlan.VtepDevIndex = vtepLink.Attrs().Index
+		}
 	}
 
 	if err := netlink.LinkAdd(vxlan); err != nil {

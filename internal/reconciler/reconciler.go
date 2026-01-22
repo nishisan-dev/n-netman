@@ -12,6 +12,7 @@ import (
 
 	"github.com/lucas/n-netman/internal/config"
 	nlink "github.com/lucas/n-netman/internal/netlink"
+	"github.com/vishvananda/netlink"
 )
 
 // Reconciler manages the reconciliation loop.
@@ -221,16 +222,34 @@ func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay conf
 
 // reconcileVXLANForOverlay ensures the VXLAN interface for an overlay exists and is attached to the bridge.
 func (r *Reconciler) reconcileVXLANForOverlay(ctx context.Context, overlay config.OverlayDef) error {
+	bumMode := overlay.BUM.GetMode()
+
 	r.logger.Debug("ensuring vxlan interface",
 		"name", overlay.Name,
 		"vni", overlay.VNI,
-		"bridge", overlay.Bridge,
+		"bridge", overlay.Bridge.Name,
 		"underlay_interface", overlay.UnderlayInterface,
+		"bum_mode", bumMode,
 	)
 
-	// Determine local underlay IP
-	// TODO: Implement proper underlay IP detection based on overlay.UnderlayInterface
+	// Determine local underlay IP and VTEP device
 	var localIP net.IP
+	var vtepDev string
+	if overlay.UnderlayInterface != "" {
+		vtepDev = overlay.UnderlayInterface
+		localIP = r.detectUnderlayIP(overlay.UnderlayInterface)
+	}
+
+	// Determine multicast group (only for multicast mode)
+	var group net.IP
+	if bumMode == "multicast" && overlay.BUM.Group != "" {
+		group = net.ParseIP(overlay.BUM.Group)
+		if group == nil {
+			r.logger.Warn("invalid multicast group, falling back to head-end-replication",
+				"vxlan", overlay.Name,
+				"group", overlay.BUM.Group)
+		}
+	}
 
 	// Use default DstPort if not specified
 	dstPort := overlay.DstPort
@@ -246,6 +265,8 @@ func (r *Reconciler) reconcileVXLANForOverlay(ctx context.Context, overlay confi
 		MTU:      overlay.MTU,
 		Learning: overlay.Learning,
 		Bridge:   overlay.Bridge.Name,
+		Group:    group,
+		VtepDev:  vtepDev,
 	}
 
 	if err := r.vxlan.Create(cfg); err != nil {
@@ -256,16 +277,19 @@ func (r *Reconciler) reconcileVXLANForOverlay(ctx context.Context, overlay confi
 }
 
 // reconcileFDBForOverlay syncs FDB entries with configured peers for an overlay.
-// Note: When VXLAN learning is enabled, the kernel manages FDB automatically
-// and manual FDB entries are not needed.
+// For head-end-replication mode, populates FDB with 00:00:00:00:00:00 entries.
+// For multicast mode, the kernel handles BUM traffic via IGMP.
 func (r *Reconciler) reconcileFDBForOverlay(ctx context.Context, overlay config.OverlayDef) error {
-	// Skip FDB sync when learning is enabled - kernel manages it automatically
-	if overlay.Learning {
-		r.logger.Debug("skipping fdb sync, vxlan learning is enabled", "vxlan", overlay.Name)
+	bumMode := overlay.BUM.GetMode()
+
+	// Multicast mode: kernel handles BUM via multicast group, skip FDB sync
+	if bumMode == "multicast" {
+		r.logger.Debug("skipping fdb sync, multicast mode enabled", "vxlan", overlay.Name)
 		return nil
 	}
 
-	// Get peers from legacy config (for now, v2 will need per-overlay peers)
+	// Head-end replication mode: populate FDB with 00:00:00:00:00:00 entries
+	// This is required for BUM traffic even when learning=true
 	peers := r.cfg.GetPeers()
 
 	// Build list of peer IPs
@@ -279,12 +303,47 @@ func (r *Reconciler) reconcileFDBForOverlay(ctx context.Context, overlay config.
 		peerIPs = append(peerIPs, ip)
 	}
 
-	r.logger.Debug("syncing fdb entries", "vxlan", overlay.Name, "peer_count", len(peerIPs))
+	r.logger.Debug("syncing fdb entries for head-end replication",
+		"vxlan", overlay.Name,
+		"peer_count", len(peerIPs),
+		"bum_mode", bumMode)
 
 	if err := r.fdb.SyncPeers(overlay.Name, peerIPs); err != nil {
 		return fmt.Errorf("failed to sync fdb for %s: %w", overlay.Name, err)
 	}
 
+	return nil
+}
+
+// detectUnderlayIP returns the first IP address of the specified interface.
+// Prefers IPv4, falls back to IPv6 if no v4 address is found.
+func (r *Reconciler) detectUnderlayIP(ifaceName string) net.IP {
+	link, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		r.logger.Warn("underlay interface not found", "interface", ifaceName, "error", err)
+		return nil
+	}
+
+	// Try IPv4 first
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	if err == nil && len(addrs) > 0 {
+		r.logger.Debug("detected underlay IPv4", "interface", ifaceName, "ip", addrs[0].IP)
+		return addrs[0].IP
+	}
+
+	// Fall back to IPv6
+	addrs, err = netlink.AddrList(link, netlink.FAMILY_V6)
+	if err == nil && len(addrs) > 0 {
+		// Skip link-local addresses (fe80::)
+		for _, addr := range addrs {
+			if !addr.IP.IsLinkLocalUnicast() {
+				r.logger.Debug("detected underlay IPv6", "interface", ifaceName, "ip", addr.IP)
+				return addr.IP
+			}
+		}
+	}
+
+	r.logger.Warn("no usable IP found on underlay interface", "interface", ifaceName)
 	return nil
 }
 
