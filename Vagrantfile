@@ -90,27 +90,31 @@ Vagrant.configure("2") do |config|
         mkdir -p /etc/n-netman/tls
       SHELL
 
-      # Gerar certificados TLS uma vez (no primeiro host) e copiar para todos
+      # Copiar código fonte (synced folder) - precisa vir ANTES de gerar certs
+      vm.vm.synced_folder ".", "/home/vagrant/n-netman"
+
+      # Gerar certificados TLS usando synced folder (compartilhado entre VMs)
       vm.vm.provision "shell", inline: <<-SHELL
         set -e
         cd /home/vagrant/n-netman
         
-        # Gerar certificados se não existirem
-        if [ ! -f /tmp/n-netman-certs/ca.crt ]; then
-          ./scripts/gen-certs.sh /tmp/n-netman-certs "host-a host-b host-c"
+        # Usar synced folder para compartilhar certificados entre VMs
+        CERT_DIR="/home/vagrant/n-netman/.vagrant-certs"
+        
+        # Gerar certificados se não existirem (apenas primeiro host faz isso)
+        if [ ! -f "$CERT_DIR/ca.crt" ]; then
+          mkdir -p "$CERT_DIR"
+          ./scripts/gen-certs.sh "$CERT_DIR" "host-a host-b host-c"
         fi
         
         # Copiar certificados para este host
-        cp /tmp/n-netman-certs/ca.crt /etc/n-netman/tls/
-        cp /tmp/n-netman-certs/#{node[:name]}.crt /etc/n-netman/tls/server.crt
-        cp /tmp/n-netman-certs/#{node[:name]}.key /etc/n-netman/tls/server.key
+        cp "$CERT_DIR/ca.crt" /etc/n-netman/tls/
+        cp "$CERT_DIR/#{node[:name]}.crt" /etc/n-netman/tls/server.crt
+        cp "$CERT_DIR/#{node[:name]}.key" /etc/n-netman/tls/server.key
         chmod 600 /etc/n-netman/tls/server.key
         
         echo "Certificados TLS instalados para #{node[:name]}"
       SHELL
-
-      # Copiar código fonte (synced folder)
-      vm.vm.synced_folder ".", "/home/vagrant/n-netman"
 
       # Provisioning: build e config específica do nó
       vm.vm.provision "shell", inline: <<-SHELL
