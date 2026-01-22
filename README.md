@@ -31,6 +31,13 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ⚠️ Integração libvirt/attach de VMs
 - ⚠️ Netplan parsing e rotas conectadas/estáticas
 
+### Ainda não funciona (resumo rápido)
+
+- ❌ TLS efetivo no gRPC (`security.control_plane.tls` ainda não é aplicado)
+- ❌ Políticas de import/export (`allow/deny/accept_all`, `export_all`, `include_connected`, `include_netplan_static`)
+- ❌ Validação de PSK entre peers
+- ❌ Integração libvirt (attach automático de VMs)
+
 ---
 
 ## 📋 Pré-requisitos
