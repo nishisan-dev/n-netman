@@ -1,0 +1,51 @@
+@startuml
+title VXLAN Overlay Network
+
+cloud "Underlay Network\n(10.10.0.0/24)" {
+    node "Host A\n10.10.0.11" as HA {
+        rectangle "br-nnet-100" as BA
+        rectangle "vxlan100" as VA
+        rectangle "VM-A1" as VMA1
+        rectangle "VM-A2" as VMA2
+        
+        VMA1 --> BA
+        VMA2 --> BA
+        VA --> BA
+    }
+    
+    node "Host B\n10.10.0.12" as HB {
+        rectangle "br-nnet-100" as BB
+        rectangle "vxlan100" as VB
+        rectangle "VM-B1" as VMB1
+        
+        VMB1 --> BB
+        VB --> BB
+    }
+    
+    node "Host C\n10.10.0.13" as HC {
+        rectangle "br-nnet-100" as BC
+        rectangle "vxlan100" as VC
+        rectangle "VM-C1" as VMC1
+        
+        VMC1 --> BC
+        VC --> BC
+    }
+}
+
+VA <-[#blue,dashed]-> VB : VXLAN VNI 100\nUDP 4789
+VA <-[#blue,dashed]-> VC : VXLAN VNI 100\nUDP 4789
+VB <-[#blue,dashed]-> VC : VXLAN VNI 100\nUDP 4789
+
+note bottom of HA
+  Overlay: 172.16.10.0/24
+end note
+
+note bottom of HB
+  Overlay: 172.16.20.0/24
+end note
+
+note bottom of HC
+  Overlay: 172.16.30.0/24
+end note
+
+@enduml

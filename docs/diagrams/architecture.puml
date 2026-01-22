@@ -1,0 +1,38 @@
+@startuml
+skinparam componentStyle rectangle
+
+package "n-netman daemon" {
+    [Config Loader] --> [Reconciler]
+    [Reconciler] --> [VXLAN Manager]
+    [Reconciler] --> [Bridge Manager]
+    [Reconciler] --> [FDB Manager]
+    
+    [gRPC Server] --> [Route Table]
+    [gRPC Client] --> [Route Table]
+    [Route Table] --> [Route Manager]
+    
+    [Observability] --> [Prometheus Metrics]
+    [Observability] --> [Health Endpoints]
+}
+
+package "Linux Kernel" {
+    [netlink API]
+    [VXLAN Module]
+    [Bridge Module]
+    [Routing Tables]
+}
+
+[VXLAN Manager] --> [netlink API]
+[Bridge Manager] --> [netlink API]
+[FDB Manager] --> [netlink API]
+[Route Manager] --> [Routing Tables]
+
+cloud "Peer Nodes" {
+    [Peer A gRPC]
+    [Peer B gRPC]
+}
+
+[gRPC Client] --> [Peer A gRPC]
+[gRPC Client] --> [Peer B gRPC]
+
+@enduml

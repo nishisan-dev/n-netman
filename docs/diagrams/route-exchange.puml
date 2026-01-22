@@ -1,0 +1,38 @@
+@startuml
+title Route Exchange Protocol
+
+participant "Host A\n(curitiba-a-01)" as A
+participant "Host B\n(curitiba-b-01)" as B
+participant "Host C\n(curitiba-c-01)" as C
+
+== Initial State Exchange ==
+A -> B: ExchangeState(my_routes)
+B --> A: StateResponse(peer_routes)
+
+A -> C: ExchangeState(my_routes)
+C --> A: StateResponse(peer_routes)
+
+== Route Announcement ==
+note over A: New local route detected:\n172.16.30.0/24
+
+A -> B: AnnounceRoutes([172.16.30.0/24])
+B --> A: RouteAck(accepted=true)
+note over B: Install route:\nip route add 172.16.30.0/24\n  via <overlay-ip> table 100
+
+A -> C: AnnounceRoutes([172.16.30.0/24])
+C --> A: RouteAck(accepted=true)
+
+== Keepalive ==
+loop Every 1.5s
+    A -> B: Keepalive(seq=N)
+    B --> A: KeepaliveAck(seq=N)
+end
+
+== Route Withdrawal ==
+note over A: Route removed locally
+
+A -> B: WithdrawRoutes([172.16.30.0/24])
+B --> A: RouteAck(processed=1)
+note over B: Remove route from table 100
+
+@enduml

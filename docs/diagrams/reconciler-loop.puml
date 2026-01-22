@@ -1,0 +1,38 @@
+@startuml
+title Reconciler Loop (Multi-Overlay)
+
+participant "Config" as C
+participant "Reconciler" as R
+participant "BridgeManager" as BM
+participant "VXLANManager" as VM
+participant "FDBManager" as FM
+participant "Linux Kernel" as K
+
+loop Every 10 seconds
+    R -> C: GetOverlays()
+    C --> R: []OverlayDef
+    
+    loop For each overlay (VNI 100, 200, ...)
+        R -> BM: Ensure bridge exists (br-prod, br-mgmt)
+        BM -> K: netlink: create/update bridge
+        K --> BM: OK
+        
+        R -> VM: Ensure VXLAN exists (vxlan-prod, vxlan-mgmt)
+        VM -> K: netlink: create/update vxlan
+        K --> VM: OK
+        
+        VM -> BM: Attach VXLAN to bridge
+        BM -> K: netlink: set master
+        K --> BM: OK
+        
+        R -> FM: Sync FDB entries for overlay
+        loop For each peer
+            FM -> K: netlink: add FDB entry
+            K --> FM: OK
+        end
+    end
+    
+    R -> R: Sleep 10s
+end
+
+@enduml

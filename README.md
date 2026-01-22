@@ -592,188 +592,27 @@ nnet doctor
 
 O diagrama abaixo mostra a arquitetura atual. O control-plane agora implementa troca real de rotas via gRPC.
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+Fonte: `docs/diagrams/architecture.puml`
 
-package "n-netman daemon" {
-    [Config Loader] --> [Reconciler]
-    [Reconciler] --> [VXLAN Manager]
-    [Reconciler] --> [Bridge Manager]
-    [Reconciler] --> [FDB Manager]
-    
-    [gRPC Server] --> [Route Table]
-    [gRPC Client] --> [Route Table]
-    [Route Table] --> [Route Manager]
-    
-    [Observability] --> [Prometheus Metrics]
-    [Observability] --> [Health Endpoints]
-}
-
-package "Linux Kernel" {
-    [netlink API]
-    [VXLAN Module]
-    [Bridge Module]
-    [Routing Tables]
-}
-
-[VXLAN Manager] --> [netlink API]
-[Bridge Manager] --> [netlink API]
-[FDB Manager] --> [netlink API]
-[Route Manager] --> [Routing Tables]
-
-cloud "Peer Nodes" {
-    [Peer A gRPC]
-    [Peer B gRPC]
-}
-
-[gRPC Client] --> [Peer A gRPC]
-[gRPC Client] --> [Peer B gRPC]
-
-@enduml
-```
+![Arquitetura geral](https://uml.nishisan.dev/plantuml/svg/XPFHJiCm34NV-nNMtliBQ6i1WTX6jI64DFN1IqmNBNMgD4LCY7ydfTsMZbNayUR4zlLLfhL3wvfIH_LUSOKMIn2ch0mJkxKxQ09BmY4NcgAeGh77Wc32CPChaK4YbOOdy1M1FvlKyBigO6vGaiqXZczWio9XM2ZjXGuAX8vuVPlFbh10zhL7eSGgwLl_GztV9aEauufLbiAQxCTvAjCuWXVSQie39jNA6nzbGYLahhHytjQ-7swLLkxGmvar9RaTDJKio5abwdmSVY3KRWTtB2kZs7dqEqXWhhZvX2UoJFgqVX-ALho7MVRO5-vNQsHpyd1SPAYrBXGNdREkqqKgtKo31fUHN4F2FAxT3zTtNcauJ2IqQIHCCY8BIoEfFXd-bMRGHfS7Ij8hhOs_iGuUZTqVIqHJOjd-Zny0)
 
 ### Fluxo de Reconciliação (Multi-Overlay)
 
-```plantuml
-@startuml
-title Reconciler Loop (Multi-Overlay)
+Fonte: `docs/diagrams/reconciler-loop.puml`
 
-participant "Config" as C
-participant "Reconciler" as R
-participant "BridgeManager" as BM
-participant "VXLANManager" as VM
-participant "FDBManager" as FM
-participant "Linux Kernel" as K
-
-loop Every 10 seconds
-    R -> C: GetOverlays()
-    C --> R: []OverlayDef
-    
-    loop For each overlay (VNI 100, 200, ...)
-        R -> BM: Ensure bridge exists (br-prod, br-mgmt)
-        BM -> K: netlink: create/update bridge
-        K --> BM: OK
-        
-        R -> VM: Ensure VXLAN exists (vxlan-prod, vxlan-mgmt)
-        VM -> K: netlink: create/update vxlan
-        K --> VM: OK
-        
-        VM -> BM: Attach VXLAN to bridge
-        BM -> K: netlink: set master
-        K --> BM: OK
-        
-        R -> FM: Sync FDB entries for overlay
-        loop For each peer
-            FM -> K: netlink: add FDB entry
-            K --> FM: OK
-        end
-    end
-    
-    R -> R: Sleep 10s
-end
-
-@enduml
-```
+![Fluxo de reconciliacao](https://uml.nishisan.dev/plantuml/svg/bPDHIyCm4CVVyoaEdogiS_hO1t6TgqXNXGb541zYUvl1B2t9TMpVtYGjNJiHCGz9oV-Vkzybrpj3N5Epaum4IOGr5fKgX4GDgwgg8SWQII9ytgEM_7Z9M6tjeX0rLmGNYqfjnFO2k875M3d5yUfwhCPQb5lCkEBRpX1dOqV-kfe_3GtvcI6vZuToSYQlX6eEaA9MABqXPKowWfQsaYDSpy0umj8mi6CDuIqi8dX0wYermQLN5X1QQHt1stkdtEF6Atxo8PDA0_BY4whM0K7-z6XJp2PmuwRfTDe6wrF5MGHBPHgDyE6l0l0W31a8FdHOwwgSsFrmjztHwM2SkPDf10f92lKLGQ6H4rurTMcNBb1lJpsuI_ISzfjZYln4uQ-xXzWV95STH_izHid_GF5dpaZoNqZQM8vpJkGkiKMXwhoWd_KR9DXnGwZ_KtLYnPUZAi1s4A0YBT30nZvXztgzU_osDGxIk97yuE5bsGSzZhmjLZB6GbMouNhgHDjkBnAnjZrac9FPdPtTJ_eD)
 
 ### Troca de Rotas entre Peers
 
-```plantuml
-@startuml
-title Route Exchange Protocol
+Fonte: `docs/diagrams/route-exchange.puml`
 
-participant "Host A\n(curitiba-a-01)" as A
-participant "Host B\n(curitiba-b-01)" as B
-participant "Host C\n(curitiba-c-01)" as C
-
-== Initial State Exchange ==
-A -> B: ExchangeState(my_routes)
-B --> A: StateResponse(peer_routes)
-
-A -> C: ExchangeState(my_routes)
-C --> A: StateResponse(peer_routes)
-
-== Route Announcement ==
-note over A: New local route detected:\n172.16.30.0/24
-
-A -> B: AnnounceRoutes([172.16.30.0/24])
-B --> A: RouteAck(accepted=true)
-note over B: Install route:\nip route add 172.16.30.0/24\n  via <overlay-ip> table 100
-
-A -> C: AnnounceRoutes([172.16.30.0/24])
-C --> A: RouteAck(accepted=true)
-
-== Keepalive ==
-loop Every 1.5s
-    A -> B: Keepalive(seq=N)
-    B --> A: KeepaliveAck(seq=N)
-end
-
-== Route Withdrawal ==
-note over A: Route removed locally
-
-A -> B: WithdrawRoutes([172.16.30.0/24])
-B --> A: RouteAck(processed=1)
-note over B: Remove route from table 100
-
-@enduml
-```
+![Troca de rotas entre peers](https://uml.nishisan.dev/plantuml/svg/bPFBJiCm44Nt_eeHgtIHal2KAe988oGG4a9bmO8Yv3e3M3YsiPr2_vv9qeQ048yi9sVkt9cRdFZ0NQWhnO8C2c5cwe1m-YQUk7v4k78c664KOvOmAQJbEi3McV41yhcEHEraa0iUypX9Hrl0FUJVeDCXkkZHwJTeCKH5ZnQCPHcSQwfp1TU13rrc6SiXFeRffA-rH5Ijxbspa1-nASH4v9EkTuRU6kqnieYkPpgLuWULuYygPBGxOwwrgRN02cazCgaD5SqINQDmYQ-WZA1jsaOeCQ08M4xcEZtS6QS7uzrad6plxB5-kOrUg-wZsy_StM39biZ5SyI5G4kgMN0rZWOEIEvSK_XgFP_6IhksmiiIFclFDS1ISZXgUXLVnT8UG-0B-cBI9FautAyEYzySDjUxGBHSoMMRh3B6mYcDNK4wtlSCwDaSf0SZZo_PvQXzsH-XVzkCMGEeoq50Dp8ybOw_KWXVu-a0XnKLoYuejVg8OjFvZoYiCmAzfqtJBq7CsYdhupyuKmrFUqAMc__p7G00)
 
 ### Topologia de Rede
 
-```plantuml
-@startuml
-title VXLAN Overlay Network
+Fonte: `docs/diagrams/topology.puml`
 
-cloud "Underlay Network\n(10.10.0.0/24)" {
-    node "Host A\n10.10.0.11" as HA {
-        rectangle "br-nnet-100" as BA
-        rectangle "vxlan100" as VA
-        rectangle "VM-A1" as VMA1
-        rectangle "VM-A2" as VMA2
-        
-        VMA1 --> BA
-        VMA2 --> BA
-        VA --> BA
-    }
-    
-    node "Host B\n10.10.0.12" as HB {
-        rectangle "br-nnet-100" as BB
-        rectangle "vxlan100" as VB
-        rectangle "VM-B1" as VMB1
-        
-        VMB1 --> BB
-        VB --> BB
-    }
-    
-    node "Host C\n10.10.0.13" as HC {
-        rectangle "br-nnet-100" as BC
-        rectangle "vxlan100" as VC
-        rectangle "VM-C1" as VMC1
-        
-        VMC1 --> BC
-        VC --> BC
-    }
-}
-
-VA <-[#blue,dashed]-> VB : VXLAN VNI 100\nUDP 4789
-VA <-[#blue,dashed]-> VC : VXLAN VNI 100\nUDP 4789
-VB <-[#blue,dashed]-> VC : VXLAN VNI 100\nUDP 4789
-
-note bottom of HA
-  Overlay: 172.16.10.0/24
-end note
-
-note bottom of HB
-  Overlay: 172.16.20.0/24
-end note
-
-note bottom of HC
-  Overlay: 172.16.30.0/24
-end note
-
-@enduml
-```
+![Topologia de rede](https://uml.nishisan.dev/plantuml/svg/bPHTJy8m58Rl-ojEveqc3jT1H8anjFK24q5lQ4p4Yy7gHnnjiXNKcFrtEhP13PrWjulcx7rtpdEsqtwcerGlvWdIxpeHm1_lo0Zkbo9DecyO2VsfqW-4PebQnE2DPVphmKGUuw1bRdETXPqJ3tuGc2LLBC0Rg4m3cSXQWh47KGO3KgcAbOgPZkIhoUnDKrzAeNqS16iT9IxLyYk9P2tXJWaV-gHCnOS4Dod2MX5k59jDuGFVlxPhA9GxCM97ShHvYTK0QZMWp3cW1pQ0xcy0RS2ZTGCeTk7H2czhvzIEk56OXT8kKTY1A6m_2cj0OJKASwAm2cLhvyoEv2X7o7oeA__fQ9ein6aSPMyYVZOAmzoh_dW-kWLJoKIERnwWqxsuRBAmlopqtnOabHOmLLghEQWNCnocw6hyUe2xOGkVhpjknWi96KEXttLHXolSws8ELtl7rJVRue1O0G00)
 
 ---
 
