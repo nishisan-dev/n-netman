@@ -695,7 +695,7 @@ const file_api_v1_nnetman_proto_rawDesc = "" +
 	"\rExchangeState\x12\x18.nnetman.v1.StateRequest\x1a\x19.nnetman.v1.StateResponse\x12E\n" +
 	"\x0eAnnounceRoutes\x12\x1d.nnetman.v1.RouteAnnouncement\x1a\x14.nnetman.v1.RouteAck\x12C\n" +
 	"\x0eWithdrawRoutes\x12\x1b.nnetman.v1.RouteWithdrawal\x1a\x14.nnetman.v1.RouteAck\x12L\n" +
-	"\tKeepalive\x12\x1c.nnetman.v1.KeepaliveRequest\x1a\x1d.nnetman.v1.KeepaliveResponse(\x010\x01B,Z*github.com/nishisan-dev/n-netman/api/v1;nnetmanv1b\x06proto3"
+	"\tKeepalive\x12\x1c.nnetman.v1.KeepaliveRequest\x1a\x1d.nnetman.v1.KeepaliveResponse(\x010\x01B3Z1github.com/nishisan-dev/n-netman/api/v1;nnetmanv1b\x06proto3"
 
 var (
 	file_api_v1_nnetman_proto_rawDescOnce sync.Once
