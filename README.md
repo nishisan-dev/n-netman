@@ -594,25 +594,25 @@ O diagrama abaixo mostra a arquitetura atual. O control-plane agora implementa t
 
 Fonte: `docs/diagrams/architecture.puml`
 
-![Arquitetura geral](https://uml.nishisan.dev/plantuml/svg/XPFHJiCm34NV-nNMtliBQ6i1WTX6jI64DFN1IqmNBNMgD4LCY7ydfTsMZbNayUR4zlLLfhL3wvfIH_LUSOKMIn2ch0mJkxKxQ09BmY4NcgAeGh77Wc32CPChaK4YbOOdy1M1FvlKyBigO6vGaiqXZczWio9XM2ZjXGuAX8vuVPlFbh10zhL7eSGgwLl_GztV9aEauufLbiAQxCTvAjCuWXVSQie39jNA6nzbGYLahhHytjQ-7swLLkxGmvar9RaTDJKio5abwdmSVY3KRWTtB2kZs7dqEqXWhhZvX2UoJFgqVX-ALho7MVRO5-vNQsHpyd1SPAYrBXGNdREkqqKgtKo31fUHN4F2FAxT3zTtNcauJ2IqQIHCCY8BIoEfFXd-bMRGHfS7Ij8hhOs_iGuUZTqVIqHJOjd-Zny0)
+![Arquitetura geral](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/architecture.puml)
 
 ### Fluxo de Reconciliação (Multi-Overlay)
 
 Fonte: `docs/diagrams/reconciler-loop.puml`
 
-![Fluxo de reconciliacao](https://uml.nishisan.dev/plantuml/svg/bPDHIyCm4CVVyoaEdogiS_hO1t6TgqXNXGb541zYUvl1B2t9TMpVtYGjNJiHCGz9oV-Vkzybrpj3N5Epaum4IOGr5fKgX4GDgwgg8SWQII9ytgEM_7Z9M6tjeX0rLmGNYqfjnFO2k875M3d5yUfwhCPQb5lCkEBRpX1dOqV-kfe_3GtvcI6vZuToSYQlX6eEaA9MABqXPKowWfQsaYDSpy0umj8mi6CDuIqi8dX0wYermQLN5X1QQHt1stkdtEF6Atxo8PDA0_BY4whM0K7-z6XJp2PmuwRfTDe6wrF5MGHBPHgDyE6l0l0W31a8FdHOwwgSsFrmjztHwM2SkPDf10f92lKLGQ6H4rurTMcNBb1lJpsuI_ISzfjZYln4uQ-xXzWV95STH_izHid_GF5dpaZoNqZQM8vpJkGkiKMXwhoWd_KR9DXnGwZ_KtLYnPUZAi1s4A0YBT30nZvXztgzU_osDGxIk97yuE5bsGSzZhmjLZB6GbMouNhgHDjkBnAnjZrac9FPdPtTJ_eD)
+![Fluxo de reconciliacao](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/reconciler-loop.puml)
 
 ### Troca de Rotas entre Peers
 
 Fonte: `docs/diagrams/route-exchange.puml`
 
-![Troca de rotas entre peers](https://uml.nishisan.dev/plantuml/svg/bPFBJiCm44Nt_eeHgtIHal2KAe988oGG4a9bmO8Yv3e3M3YsiPr2_vv9qeQ048yi9sVkt9cRdFZ0NQWhnO8C2c5cwe1m-YQUk7v4k78c664KOvOmAQJbEi3McV41yhcEHEraa0iUypX9Hrl0FUJVeDCXkkZHwJTeCKH5ZnQCPHcSQwfp1TU13rrc6SiXFeRffA-rH5Ijxbspa1-nASH4v9EkTuRU6kqnieYkPpgLuWULuYygPBGxOwwrgRN02cazCgaD5SqINQDmYQ-WZA1jsaOeCQ08M4xcEZtS6QS7uzrad6plxB5-kOrUg-wZsy_StM39biZ5SyI5G4kgMN0rZWOEIEvSK_XgFP_6IhksmiiIFclFDS1ISZXgUXLVnT8UG-0B-cBI9FautAyEYzySDjUxGBHSoMMRh3B6mYcDNK4wtlSCwDaSf0SZZo_PvQXzsH-XVzkCMGEeoq50Dp8ybOw_KWXVu-a0XnKLoYuejVg8OjFvZoYiCmAzfqtJBq7CsYdhupyuKmrFUqAMc__p7G00)
+![Troca de rotas entre peers](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/route-exchange.puml)
 
 ### Topologia de Rede
 
 Fonte: `docs/diagrams/topology.puml`
 
-![Topologia de rede](https://uml.nishisan.dev/plantuml/svg/bPHTJy8m58Rl-ojEveqc3jT1H8anjFK24q5lQ4p4Yy7gHnnjiXNKcFrtEhP13PrWjulcx7rtpdEsqtwcerGlvWdIxpeHm1_lo0Zkbo9DecyO2VsfqW-4PebQnE2DPVphmKGUuw1bRdETXPqJ3tuGc2LLBC0Rg4m3cSXQWh47KGO3KgcAbOgPZkIhoUnDKrzAeNqS16iT9IxLyYk9P2tXJWaV-gHCnOS4Dod2MX5k59jDuGFVlxPhA9GxCM97ShHvYTK0QZMWp3cW1pQ0xcy0RS2ZTGCeTk7H2czhvzIEk56OXT8kKTY1A6m_2cj0OJKASwAm2cLhvyoEv2X7o7oeA__fQ9ein6aSPMyYVZOAmzoh_dW-kWLJoKIERnwWqxsuRBAmlopqtnOabHOmLLghEQWNCnocw6hyUe2xOGkVhpjknWi96KEXttLHXolSws8ELtl7rJVRue1O0G00)
+![Topologia de rede](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/topology.puml)
 
 ---
 
