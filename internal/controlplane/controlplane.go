@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
@@ -36,7 +37,7 @@ type Route struct {
 // RouteTable stores learned routes from peers.
 type RouteTable struct {
 	mu     sync.RWMutex
-	routes map[string]Route // key: prefix
+	routes map[string]Route // key: prefix; last writer wins on collisions
 }
 
 // NewRouteTable creates a new route table.
@@ -51,6 +52,7 @@ func (rt *RouteTable) Add(r Route) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
+	// Normalize timestamps on insert to support lease-based expiration.
 	r.ReceivedAt = time.Now()
 	if r.LeaseSeconds > 0 {
 		r.ExpiresAt = r.ReceivedAt.Add(time.Duration(r.LeaseSeconds) * time.Second)
@@ -186,12 +188,21 @@ func (s *Server) Start() error {
 	}
 	s.listener = listener
 
-	// TODO: Add TLS support when cfg.Security.ControlPlane.TLS.Enabled
+	// Configure TLS if enabled
 	opts := []grpc.ServerOption{
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			Time:    30 * time.Second,
 			Timeout: 10 * time.Second,
 		}),
+	}
+
+	if s.cfg.Security.ControlPlane.TLS.Enabled {
+		creds, err := LoadServerTLSConfig(&s.cfg.Security.ControlPlane.TLS)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS config: %w", err)
+		}
+		opts = append(opts, grpc.Creds(creds))
+		s.logger.Info("TLS enabled for control plane server")
 	}
 
 	s.grpcServer = grpc.NewServer(opts...)
@@ -266,7 +277,7 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 		"route_count", len(req.Routes),
 	)
 
-	// Process incoming routes from the peer
+	// Process incoming routes from the peer before returning our current view.
 	incomingRoutes := make([]Route, 0, len(req.Routes))
 	for _, r := range req.Routes {
 		route := Route{
@@ -463,6 +474,7 @@ func NewClient(cfg *config.Config, routeTable *RouteTable, logger *slog.Logger) 
 // ConnectToPeers establishes connections to all configured peers.
 func (c *Client) ConnectToPeers(ctx context.Context) error {
 	var firstErr error
+	// Note: peers come from legacy overlay config (v1); v2 overlays store peers elsewhere.
 	for _, peer := range c.cfg.Overlay.Peers {
 		if err := c.connectPeer(ctx, peer); err != nil {
 			c.logger.Warn("failed to connect to peer",
@@ -493,9 +505,21 @@ func (c *Client) connectPeer(ctx context.Context, peer config.PeerConfig) error 
 
 	c.logger.Debug("connecting to peer", "peer_id", peer.ID, "address", addr)
 
-	// TODO: Add TLS support
+	// Configure TLS if enabled, otherwise use insecure credentials
+	var transportCreds credentials.TransportCredentials
+	if c.cfg.Security.ControlPlane.TLS.Enabled {
+		var err error
+		transportCreds, err = LoadClientTLSConfig(&c.cfg.Security.ControlPlane.TLS)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS config: %w", err)
+		}
+		c.logger.Debug("using TLS for peer connection", "peer_id", peer.ID)
+	} else {
+		transportCreds = insecure.NewCredentials()
+	}
+
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:    30 * time.Second,
 			Timeout: 10 * time.Second,
@@ -788,7 +812,7 @@ func (c *Client) CheckPeerHealth(ctx context.Context) ([]string, error) {
 	var newlyUnhealthy []string
 
 	for _, pc := range peers {
-		// Try a simple state exchange as health check
+		// Use ExchangeState as a lightweight liveness probe (no routes sent).
 		req := &pb.StateRequest{
 			NodeId:      c.cfg.Node.ID,
 			Routes:      nil, // Empty for health check
