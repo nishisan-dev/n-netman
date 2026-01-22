@@ -103,6 +103,13 @@ security:
     listen:
       address: "0.0.0.0"
       port: 9898
+    # TLS configuration for secure peer communication (mTLS)
+    # Generate certificates with: ./scripts/gen-certs.sh /path/to/certs
+    tls:
+      enabled: false  # Set to true to enable TLS
+      cert_file: "/etc/n-netman/tls/server.crt"
+      key_file: "/etc/n-netman/tls/server.key"
+      ca_file: "/etc/n-netman/tls/ca.crt"  # Required for mTLS
 
 observability:
   logging:
