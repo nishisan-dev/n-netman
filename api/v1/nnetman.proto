@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package nnetman.v1;
 
-option go_package = "github.com/lucas/n-netman/api/v1;nnetmanv1";
+option go_package = "github.com/nishisan-dev/n-netman/api/v1;nnetmanv1";
 
 // NNetMan is the control plane service for n-netman agents.
 // It enables route exchange and peer health monitoring between nodes.

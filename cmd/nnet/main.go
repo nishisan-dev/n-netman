@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/lucas/n-netman/internal/config"
-	nlink "github.com/lucas/n-netman/internal/netlink"
-	"github.com/lucas/n-netman/internal/observability"
-	"github.com/lucas/n-netman/internal/reconciler"
-	"github.com/lucas/n-netman/internal/routing"
+	"github.com/nishisan-dev/n-netman/internal/config"
+	nlink "github.com/nishisan-dev/n-netman/internal/netlink"
+	"github.com/nishisan-dev/n-netman/internal/observability"
+	"github.com/nishisan-dev/n-netman/internal/reconciler"
+	"github.com/nishisan-dev/n-netman/internal/routing"
 )
 
 var (

@@ -15,9 +15,9 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/lucas/n-netman/api/v1"
-	"github.com/lucas/n-netman/internal/config"
-	"github.com/lucas/n-netman/internal/observability"
+	pb "github.com/nishisan-dev/n-netman/api/v1"
+	"github.com/nishisan-dev/n-netman/internal/config"
+	"github.com/nishisan-dev/n-netman/internal/observability"
 )
 
 // Route represents a network route for exchange between peers.

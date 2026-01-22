@@ -13,15 +13,17 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 
 - ✅ Criação/atualização de interfaces VXLAN e bridges Linux
 - ✅ Sincronização de FDB para peers configurados (flooding BUM)
+- ✅ BUM em head-end-replication (FDB) e multicast (grupo IP)
 - ✅ **Troca de rotas via gRPC** (ExchangeState, AnnounceRoutes, WithdrawRoutes)
 - ✅ Instalação automática de rotas recebidas no kernel
-- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`
+- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`, `version`
 - ✅ Carregamento/validação de config YAML com defaults
 - ✅ Healthchecks HTTP e endpoint de métricas
 - ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
 - ✅ **Estatísticas de rotas** (exported, installed, per-peer)
 - ✅ **Cleanup automático** de rotas no shutdown e quando peers caem (`flush_on_peer_down`)
-- ✅ **Multi-Overlay (v2)** — Suporte a múltiplos VXLANs com routing independente por VNI
+- ✅ **Multi-Overlay (v2)** — Múltiplos VXLANs com configuração de routing por overlay
+- ✅ Bridge com IPv4/IPv6 por overlay (para nexthop e anúncios)
 
 ### Em progresso
 
@@ -64,7 +66,7 @@ go version
 
 ```bash
 # Clonar repositório
-git clone https://github.com/lucas/n-netman.git
+git clone https://github.com/nishisan-dev/n-netman.git
 cd n-netman
 
 # Build
@@ -159,10 +161,12 @@ overlay:
 routing:
   enabled: true
   export:
+    export_all: false
     networks:
       - "172.16.10.0/24"   # Redes que este nó anuncia
       - "2001:db8:10::/64" # Suporte IPv6
     include_connected: true
+    include_netplan_static: true
     metric: 100
   import:
     accept_all: false
@@ -173,6 +177,7 @@ routing:
       - "0.0.0.0/0"        # Bloquear default route
     install:
       table: 100           # Tabela de roteamento customizada
+      replace_existing: true
       flush_on_peer_down: true
       route_lease_seconds: 30
 
@@ -188,6 +193,11 @@ security:
     listen:
       address: "0.0.0.0"
       port: 9898
+    tls:
+      enabled: false
+      cert_file: "/etc/n-netman/tls/server.crt"
+      key_file: "/etc/n-netman/tls/server.key"
+      ca_file: "/etc/n-netman/tls/ca.crt"
 
 # Observabilidade
 observability:
@@ -236,8 +246,12 @@ overlays:
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-prod"
+    bridge:
+      name: "br-prod"
+      ipv4: "10.100.0.1/24"
     underlay_interface: "ens3"    # Interface física para este overlay
+    bum:
+      mode: "head-end-replication"
     routing:
       export:
         networks:
@@ -254,8 +268,13 @@ overlays:
     dstport: 4789
     mtu: 1450
     learning: true
-    bridge: "br-mgmt"
+    bridge:
+      name: "br-mgmt"
+      ipv4: "10.200.1.1/24"
     underlay_interface: "ens4"
+    bum:
+      mode: "multicast"
+      group: "239.1.1.200"
     routing:
       export:
         networks:
@@ -285,6 +304,9 @@ Veja o exemplo completo em [`examples/multi-overlay.yaml`](examples/multi-overla
 ```bash
 # Ver ajuda
 nnet --help
+
+# Ver versão
+nnet version
 
 # Verificar configuração e mostrar status
 nnet -c /etc/n-netman/n-netman.yaml status
@@ -463,18 +485,24 @@ vagrant ssh host-b
 
 ### Métricas Prometheus
 
-Disponíveis em `http://127.0.0.1:9109/metrics`. Nota: os contadores ainda não são atualizados pelo reconciler/control-plane.
+Disponíveis em `http://127.0.0.1:9109/metrics`. Nota: métricas registradas, mas a atualização ainda não está implementada (exceto `peers_configured`).
 
 | Métrica | Descrição |
 |---------|-----------|
 | `nnetman_reconciliations_total` | Total de ciclos de reconciliação |
 | `nnetman_reconciliation_errors_total` | Erros de reconciliação |
+| `nnetman_reconciliation_duration_seconds` | Duração dos ciclos de reconciliação |
+| `nnetman_last_reconcile_timestamp_seconds` | Timestamp do último reconcile |
 | `nnetman_vxlans_active` | Interfaces VXLAN ativas |
 | `nnetman_bridges_active` | Bridges ativas |
+| `nnetman_fdb_entries_total` | Total de entradas FDB |
 | `nnetman_peers_configured` | Peers configurados |
+| `nnetman_peers_connected` | Peers conectados |
 | `nnetman_peers_healthy` | Peers saudáveis |
 | `nnetman_routes_exported` | Rotas exportadas |
 | `nnetman_routes_imported` | Rotas importadas |
+| `nnetman_grpc_requests_total` | Total de requisições gRPC |
+| `nnetman_grpc_request_duration_seconds` | Duração das requisições gRPC |
 
 ### Health Checks
 
@@ -487,6 +515,9 @@ curl http://127.0.0.1:9110/readyz
 
 # Health geral
 curl http://127.0.0.1:9110/healthz
+
+# Status detalhado (peers + rotas)
+curl http://127.0.0.1:9110/status
 ```
 
 ---
@@ -499,7 +530,7 @@ curl http://127.0.0.1:9110/healthz
 - `internal/reconciler`: loop que garante bridge/VXLAN/FDB conforme config
 - `internal/netlink`: wrappers de bridge/VXLAN/FDB/rotas via netlink
 - `internal/controlplane`: servidor/cliente gRPC com ExchangeState/Announce/Withdraw
-- `internal/routing`: políticas de export/import (somente redes do config)
+- `internal/routing`: políticas de export/import (helpers, ainda não aplicados no daemon)
 - `internal/observability`: métricas Prometheus e healthchecks HTTP
 
 ---
@@ -750,6 +781,8 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 | **Validação de PSK** | ❌ | Chaves PSK são lidas mas não validadas |
 | **Integração libvirt** | ❌ | Attach automático de VMs não implementado |
 | **Netplan parsing** | ❌ | Rotas do netplan não são lidas automaticamente |
+| **Políticas de import/export** | ❌ | `allow/deny/accept_all`, `export_all`, `include_connected`, `include_netplan_static` ainda não são aplicados no daemon |
+| **Config TLS** | ❌ | `security.control_plane.tls` ainda não é usado |
 
 ### Parcialmente Funcional
 | Item | Status | Descrição |
@@ -761,6 +794,7 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 | **Métricas** | ⚠️ | Servidor inicia, mas métricas não são atualizadas |
 | **Healthcheck** | ✅ | Endpoints funcionam |
 | **Status de peers** | ⚠️ | Health check implementado, status pode demorar |
+| **Multi-Overlay** | ⚠️ | VXLAN/bridge por VNI ok, mas import table/lease ainda usa config global |
 
 ### Próximas Prioridades
 1. Adicionar TLS ao control plane

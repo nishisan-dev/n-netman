@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lucas/n-netman/internal/config"
-	"github.com/lucas/n-netman/internal/controlplane"
+	"github.com/nishisan-dev/n-netman/internal/config"
+	"github.com/nishisan-dev/n-netman/internal/controlplane"
 )
 
 // Manager handles route export and import according to configured policies.

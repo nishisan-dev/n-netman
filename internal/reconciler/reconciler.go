@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lucas/n-netman/internal/config"
-	nlink "github.com/lucas/n-netman/internal/netlink"
+	"github.com/nishisan-dev/n-netman/internal/config"
+	nlink "github.com/nishisan-dev/n-netman/internal/netlink"
 	"github.com/vishvananda/netlink"
 )
 

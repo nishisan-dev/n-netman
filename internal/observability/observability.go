@@ -13,7 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/lucas/n-netman/internal/config"
+	"github.com/nishisan-dev/n-netman/internal/config"
 )
 
 // PeerStatus represents the status of a single peer.
