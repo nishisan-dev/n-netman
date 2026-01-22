@@ -126,8 +126,13 @@ func (m *FDBManager) List(vxlanName string) ([]FDBEntry, error) {
 // AddPeer adds a remote VXLAN peer (VTEP) to the FDB.
 // This is a convenience method that adds an FDB entry with MAC 00:00:00:00:00:00
 // to enable flooding to this peer for unknown destinations.
-// Uses 'bridge fdb append' command directly as vishvananda/netlink NeighAppend
-// doesn't work correctly for VXLAN FDB entries.
+//
+// NOTE: We use 'bridge fdb append' command directly instead of vishvananda/netlink
+// library's NeighAppend due to a known issue where NeighAppend returns "operation
+// not supported" for VXLAN FDB entries when the VXLAN is attached to a bridge.
+// See: https://github.com/vishvananda/netlink/issues/714
+// The issue suggests using Family: AF_BRIDGE, Flags: NTF_SELF, State: NUD_PERMANENT,
+// but this combination still fails in some kernel versions/configurations.
 func (m *FDBManager) AddPeer(vxlanName string, remoteIP net.IP) error {
 	// Use bridge command directly - more reliable than netlink library for VXLAN FDB
 	// bridge fdb append 00:00:00:00:00:00 dev <vxlan> dst <remote_ip>
