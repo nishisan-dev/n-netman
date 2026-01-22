@@ -252,55 +252,55 @@ func statusCmd() *cobra.Command {
 			}
 			fmt.Println()
 
-			// Get default routing table from first overlay
-			table := 100
-			if len(overlays) > 0 && overlays[0].Routing.Import.Install.Table > 0 {
-				table = overlays[0].Routing.Import.Install.Table
+			// Build map of gateway IP to peer ID (for all overlays)
+			peerByIP := make(map[string]string)
+			for _, peer := range peers {
+				peerByIP[peer.Endpoint.Address] = peer.ID
 			}
-			installedRoutes, err := routeMgr.ListByProtocol(table, nlink.RouteProtocolNNetMan)
-			installedCount := 0
-			if err == nil {
-				installedCount = len(installedRoutes)
-			}
-			fmt.Printf("  📥 Installed:  %d route(s) in table %d\n", installedCount, table)
 
-			// Show installed route details if not too many
-			if installedCount > 0 && installedCount <= 8 {
-				// Build map of gateway IP to peer ID
-				peerByIP := make(map[string]string)
-				for _, peer := range peers {
-					peerByIP[peer.Endpoint.Address] = peer.ID
+			// Show installed routes per overlay/table
+			totalInstalled := 0
+			for _, o := range overlays {
+				table := o.Routing.Import.Install.Table
+				if table == 0 {
+					table = 100 // default
 				}
 
-				// Build map of prefix to VNI based on exported routes from other peers
-				// Since we don't know the VNI from kernel, we infer from config structure
-				prefixToVNI := make(map[string]int)
-				for _, o := range overlays {
-					// Each overlay exports specific networks, so imports from other peers
-					// should match those patterns. For simplicity, show the table as VNI hint.
-					for _, prefix := range o.Routing.Export.Networks {
-						prefixToVNI[prefix] = o.VNI
-					}
+				installedRoutes, err := routeMgr.ListByProtocol(table, nlink.RouteProtocolNNetMan)
+				if err != nil {
+					continue
 				}
 
-				for _, r := range installedRoutes {
-					if r.Destination != nil {
-						gw := "-"
-						peerName := ""
-						if r.Gateway != nil {
-							gw = r.Gateway.String()
-							if name, ok := peerByIP[gw]; ok {
-								peerName = " (" + name + ")"
+				count := len(installedRoutes)
+				totalInstalled += count
+
+				if count > 0 {
+					fmt.Printf("  📥 Table %d (%s): %d route(s)\n", table, o.Name, count)
+					// Show route details if not too many
+					if count <= 6 {
+						for _, r := range installedRoutes {
+							if r.Destination != nil {
+								gw := "-"
+								peerName := ""
+								if r.Gateway != nil {
+									gw = r.Gateway.String()
+									if name, ok := peerByIP[gw]; ok {
+										peerName = " (" + name + ")"
+									}
+								}
+								devInfo := ""
+								if r.Device != "" {
+									devInfo = " dev " + r.Device
+								}
+								fmt.Printf("      • %s via %s%s%s\n", r.Destination.String(), gw, peerName, devInfo)
 							}
 						}
-						// Add device info
-						devInfo := ""
-						if r.Device != "" {
-							devInfo = " dev " + r.Device
-						}
-						fmt.Printf("      • %s via %s%s%s\n", r.Destination.String(), gw, peerName, devInfo)
 					}
 				}
+			}
+
+			if totalInstalled == 0 {
+				fmt.Println("  📥 Installed:  0 route(s)")
 			}
 
 			return nil
@@ -406,9 +406,47 @@ func routesCmd() *cobra.Command {
 			}
 
 			fmt.Println()
-			fmt.Println("📥 Imported Routes (learned from peers):")
+			fmt.Println("📥 Imported Routes (installed in kernel):")
 			fmt.Println("─────────────────────────────────────────")
-			fmt.Println("  (no active peer connections)")
+
+			routeMgr := nlink.NewRouteManager()
+			totalImported := 0
+
+			for _, overlay := range overlays {
+				table := overlay.Routing.Import.Install.Table
+				if table == 0 {
+					table = 100
+				}
+
+				installedRoutes, err := routeMgr.ListByProtocol(table, nlink.RouteProtocolNNetMan)
+				if err != nil || len(installedRoutes) == 0 {
+					continue
+				}
+
+				fmt.Printf("\n  VNI %d (%s) - Table %d:\n", overlay.VNI, overlay.Name, table)
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "    PREFIX\tNEXT-HOP\tDEVICE")
+				fmt.Fprintln(w, "    ──────\t────────\t──────")
+				for _, r := range installedRoutes {
+					if r.Destination != nil {
+						gw := "-"
+						if r.Gateway != nil {
+							gw = r.Gateway.String()
+						}
+						dev := r.Device
+						if dev == "" {
+							dev = "-"
+						}
+						fmt.Fprintf(w, "    %s\t%s\t%s\n", r.Destination.String(), gw, dev)
+						totalImported++
+					}
+				}
+				w.Flush()
+			}
+
+			if totalImported == 0 {
+				fmt.Println("  (no routes installed)")
+			}
 
 			return nil
 		},
