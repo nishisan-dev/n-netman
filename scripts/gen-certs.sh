@@ -46,12 +46,26 @@ for HOST in $HOSTS; do
         2>/dev/null
     
     # Criar arquivo de extensões para SAN (Subject Alternative Name)
+    # Mapear IPs de underlay para cada host do lab Vagrant
+    case "$HOST" in
+        "host-a") HOST_IPS="IP:192.168.56.11, IP:192.168.57.11" ;;
+        "host-b") HOST_IPS="IP:192.168.56.12, IP:192.168.57.12" ;;
+        "host-c") HOST_IPS="IP:192.168.56.13, IP:192.168.57.13" ;;
+        *) HOST_IPS="" ;;
+    esac
+    
+    # Construir SAN com todos os identificadores válidos
+    SAN="DNS:$HOST, DNS:localhost, IP:127.0.0.1"
+    if [ -n "$HOST_IPS" ]; then
+        SAN="$SAN, $HOST_IPS"
+    fi
+    
     cat > "$OUTPUT_DIR/$HOST.ext" <<EOF
 authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName = DNS:$HOST, DNS:localhost, IP:127.0.0.1
+subjectAltName = $SAN
 EOF
     
     # Assinar com a CA
