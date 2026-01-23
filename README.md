@@ -26,10 +26,10 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ Bridge com IPv4/IPv6 por overlay (para nexthop e anúncios)
 - ✅ **TLS/mTLS** para comunicação gRPC entre peers
 - ✅ **Policy-Based Routing** — Rotas instaladas em tabelas específicas por VNI
+- ✅ **Integração libvirt** — Attach/detach de VMs via `nnet libvirt`
 
 ### Em progresso
 
-- ⚠️ Integração libvirt/attach de VMs
 - ⚠️ Netplan parsing e rotas conectadas/estáticas
 - ⚠️ Políticas de import/export (`allow/deny`, `include_connected`, `include_netplan_static`)
 
@@ -37,7 +37,6 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 
 - ❌ Políticas avançadas de import/export (`allow/deny/accept_all`, `export_all`)
 - ❌ Validação de PSK entre peers
-- ❌ Integração libvirt (attach automático de VMs)
 
 ---
 
@@ -356,7 +355,38 @@ sudo nnet -c /etc/n-netman/n-netman.yaml apply
 
 # Diagnóstico do sistema
 nnet -c /etc/n-netman/n-netman.yaml doctor
+
+# Integração libvirt - listar VMs
+nnet libvirt list-vms --all
+
+# Integração libvirt - attach VM a bridge
+sudo nnet libvirt attach web-01 --bridge br-prod
 ```
+
+### Integração libvirt
+
+O n-netman oferece comandos para integrar VMs libvirt/KVM às bridges de overlay:
+
+![Fluxo de integração](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/libvirt_integration.puml)
+
+```bash
+# Configurar dependência systemd (bridges existem antes das VMs)
+sudo nnet libvirt enable
+
+# Listar VMs e interfaces
+nnet libvirt list-vms --all
+
+# Attach VM a uma bridge
+sudo nnet libvirt attach web-01 --bridge br-prod
+
+# Detach por MAC
+sudo nnet libvirt detach web-01 --mac 52:54:00:12:34:56
+
+# Ver status da integração
+nnet libvirt status
+```
+
+Veja a documentação completa em [docs/libvirt.md](docs/libvirt.md).
 
 ### Exemplo de Saída: `nnet status`
 
