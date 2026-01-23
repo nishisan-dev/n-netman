@@ -1,0 +1,83 @@
+version: 2
+project_name: n-netman
+
+builds:
+  - id: nnetd
+    main: ./cmd/nnetd
+    binary: nnetd
+    goos: [linux]
+    goarch: [amd64]
+    env: [CGO_ENABLED=0]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.buildDate={{.Date}}
+
+  - id: nnet
+    main: ./cmd/nnet
+    binary: nnet
+    goos: [linux]
+    goarch: [amd64]
+    env: [CGO_ENABLED=0]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.buildDate={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - n-netman.yml
+
+nfpms:
+  - id: deb
+    package_name: n-netman
+    vendor: Nishisan Dev
+    homepage: https://github.com/nishisan-dev/n-netman
+    maintainer: Nishisan Dev <dev@nishisan.dev>
+    description: Lightweight VXLAN L3/L2 overlay manager for Linux
+    license: Nishi-NC
+    formats: [deb]
+    bindir: /usr/local/bin
+
+    contents:
+      # Config de exemplo
+      - src: n-netman.yml
+        dst: /etc/n-netman/n-netman.yaml.example
+        type: config
+
+      # Systemd unit
+      - src: packaging/n-netman.service
+        dst: /lib/systemd/system/n-netman.service
+
+      # Diretório de config
+      - dst: /etc/n-netman
+        type: dir
+        file_info:
+          mode: 0755
+
+      # Diretório de TLS
+      - dst: /etc/n-netman/tls
+        type: dir
+        file_info:
+          mode: 0700
+
+    scripts:
+      postinstall: packaging/postinstall.sh
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
