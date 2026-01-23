@@ -93,13 +93,13 @@ func main() {
 	}
 	defer obsServer.Stop(context.Background())
 
-	// Initialize route manager for installing routes
+	// Initialize route manager for installing routes learned from peers.
 	routeMgr := nlmgr.NewRouteManager()
 
 	// Initialize route table for control plane
 	routeTable := controlplane.NewRouteTable()
 
-	// Create route installer callback
+	// Create route installer callback (control plane -> kernel).
 	routeInstaller := func(routes []controlplane.Route) {
 		installReceivedRoutes(cfg, routeMgr, routes, logger)
 	}
@@ -113,7 +113,7 @@ func main() {
 	}
 	defer cpServer.Stop()
 
-	// Start control plane client (connect to peers)
+	// Start control plane client (connect to peers and keep routes fresh).
 	cpClient := controlplane.NewClient(cfg, routeTable, logger)
 	// Set client as status provider for /status endpoint
 	obsServer.SetStatusProvider(cpClient)
@@ -130,7 +130,7 @@ func main() {
 			slog.Warn("failed to exchange state with peers", "error", err)
 		}
 
-		// Start periodic health checks and route refresh
+		// Start periodic health checks and route refresh loop.
 		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, routeMgr, logger)
 	}()
 	defer cpClient.Disconnect()
@@ -161,7 +161,7 @@ func main() {
 
 	slog.Info("shutting down n-netman daemon")
 
-	// Cleanup: flush all routes installed by n-netman
+	// Cleanup: flush all routes installed by n-netman.
 	table := cfg.Routing.Import.Install.Table
 	if table == 0 {
 		table = 100
@@ -180,7 +180,18 @@ func main() {
 }
 
 // installReceivedRoutes installs routes received from peers into the kernel.
+// Each route is installed in the table of its corresponding overlay (by VNI).
 func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, routes []controlplane.Route, logger *slog.Logger) {
+	// Build a VNI -> table mapping from overlays
+	vniToTable := make(map[uint32]int)
+	for _, overlay := range cfg.GetOverlays() {
+		table := overlay.Routing.Import.Install.Table
+		if table == 0 {
+			table = 100 // default
+		}
+		vniToTable[uint32(overlay.VNI)] = table
+	}
+
 	for _, r := range routes {
 		// Parse the prefix
 		_, ipnet, err := net.ParseCIDR(r.Prefix)
@@ -203,8 +214,19 @@ func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, rou
 			continue
 		}
 
-		// Get the routing table from config
-		table := cfg.Routing.Import.Install.Table
+		// Get the routing table based on the route's VNI
+		table, ok := vniToTable[r.VNI]
+		if !ok {
+			// Fallback: use legacy global table if VNI not found
+			table = cfg.Routing.Import.Install.Table
+			if table == 0 {
+				table = 100
+			}
+			logger.Debug("route VNI not found in overlays, using default table",
+				"vni", r.VNI,
+				"table", table,
+			)
+		}
 
 		// Install the route
 		routeCfg := nlmgr.RouteConfig{
@@ -219,6 +241,7 @@ func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, rou
 			logger.Warn("failed to install route",
 				"prefix", r.Prefix,
 				"next_hop", r.NextHop,
+				"table", table,
 				"error", err,
 			)
 			continue
@@ -229,15 +252,18 @@ func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, rou
 			"next_hop", r.NextHop,
 			"peer", r.PeerID,
 			"metric", r.Metric,
+			"table", table,
+			"vni", r.VNI,
 		)
 	}
 }
 
 // getLocalExportableRoutes returns routes that should be exported to peers.
+// It derives the next-hop from the underlay or overlay bridge IP.
 func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.RouteTable) []controlplane.Route {
 	routes := make([]controlplane.Route, 0)
 
-	// Detect local IP by finding interface that can reach our peers
+	// Detect local IP by finding an interface that can reach our peers.
 	localIP := detectLocalIP(cfg)
 	if localIP == "" {
 		return routes // Can't export routes without a valid next-hop
@@ -254,7 +280,7 @@ func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.Route
 			metric = 100
 		}
 
-		// Determine next-hop: prefer bridge IP (overlay) over underlay IP
+		// Determine next-hop: prefer bridge IP (overlay) over underlay IP.
 		nextHop := localIP
 		if overlay.Bridge.IPv4 != "" {
 			// Extract IP from CIDR (e.g., "10.100.0.1/24" -> "10.100.0.1")
@@ -275,8 +301,8 @@ func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.Route
 	return routes
 }
 
-// detectLocalIP finds the local IP address that should be used for route announcements.
-// It looks for the IP on the same subnet as configured peers.
+// detectLocalIP finds a local IP address to use for route announcements.
+// It uses a heuristic: pick the first interface with a subnet that contains the first peer.
 func detectLocalIP(cfg *config.Config) string {
 	if len(cfg.Overlay.Peers) == 0 {
 		return ""
