@@ -154,6 +154,11 @@ func (r *Reconciler) reconcileOverlay(ctx context.Context, overlay config.Overla
 		return fmt.Errorf("fdb reconciliation failed: %w", err)
 	}
 
+	// Step 4: Sync policy routing rules (ip rule) if enabled
+	if err := r.reconcilePolicyRulesForOverlay(ctx, overlay); err != nil {
+		return fmt.Errorf("policy rules reconciliation failed: %w", err)
+	}
+
 	return nil
 }
 
@@ -161,7 +166,7 @@ func (r *Reconciler) reconcileOverlay(ctx context.Context, overlay config.Overla
 func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay config.OverlayDef) error {
 	bridgeName := overlay.Bridge.Name
 
-	// Check KVM config for bridge settings
+	// Prefer KVM bridge settings when the bridge is marked as managed.
 	var bridgeCfg *config.BridgeDef
 	for i := range r.cfg.KVM.Bridges {
 		if r.cfg.KVM.Bridges[i].Name == bridgeName {
@@ -203,7 +208,7 @@ func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay conf
 		}
 	}
 
-	// Add IP address to bridge if configured (for overlay routing)
+	// Add IP address to bridge if configured (used as overlay gateway/next-hop).
 	if overlay.Bridge.IPv4 != "" {
 		r.logger.Debug("adding IPv4 address to bridge", "bridge", bridgeName, "address", overlay.Bridge.IPv4)
 		if err := r.bridge.AddAddress(bridgeName, overlay.Bridge.IPv4); err != nil {
@@ -232,7 +237,7 @@ func (r *Reconciler) reconcileVXLANForOverlay(ctx context.Context, overlay confi
 		"bum_mode", bumMode,
 	)
 
-	// Determine local underlay IP and VTEP device
+	// Determine local underlay IP and VTEP device for kernel encapsulation.
 	var localIP net.IP
 	var vtepDev string
 	if overlay.UnderlayInterface != "" {
@@ -310,6 +315,35 @@ func (r *Reconciler) reconcileFDBForOverlay(ctx context.Context, overlay config.
 
 	if err := r.fdb.SyncPeers(overlay.Name, peerIPs); err != nil {
 		return fmt.Errorf("failed to sync fdb for %s: %w", overlay.Name, err)
+	}
+
+	return nil
+}
+
+// reconcilePolicyRulesForOverlay syncs policy routing rules (ip rule) for an overlay.
+// When lookup_rules.enabled is true, creates iif/oif rules pointing to the overlay's table.
+func (r *Reconciler) reconcilePolicyRulesForOverlay(ctx context.Context, overlay config.OverlayDef) error {
+	// Skip if lookup_rules is not enabled
+	if !overlay.Routing.Import.Install.LookupRules.Enabled {
+		return nil
+	}
+
+	bridgeName := overlay.Bridge.Name
+	table := overlay.Routing.Import.Install.Table
+
+	if table == 0 {
+		r.logger.Warn("lookup_rules enabled but no table specified, skipping", "overlay", overlay.Name)
+		return nil
+	}
+
+	r.logger.Debug("ensuring policy rules",
+		"overlay", overlay.Name,
+		"bridge", bridgeName,
+		"table", table,
+	)
+
+	if err := nlink.EnsureRuleByInterface(bridgeName, table); err != nil {
+		return fmt.Errorf("failed to ensure policy rules for %s: %w", bridgeName, err)
 	}
 
 	return nil
