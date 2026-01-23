@@ -22,19 +22,20 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
 - ✅ **Estatísticas de rotas** (exported, installed, per-peer)
 - ✅ **Cleanup automático** de rotas no shutdown e quando peers caem (`flush_on_peer_down`)
-- ✅ **Multi-Overlay (v2)** — Múltiplos VXLANs com configuração de routing por overlay
+- ✅ **Multi-Overlay (v2)** — Múltiplos VXLANs com routing independente por overlay
 - ✅ Bridge com IPv4/IPv6 por overlay (para nexthop e anúncios)
+- ✅ **TLS/mTLS** para comunicação gRPC entre peers
+- ✅ **Policy-Based Routing** — Rotas instaladas em tabelas específicas por VNI
 
 ### Em progresso
 
-- ⚠️ TLS para comunicação gRPC entre peers
 - ⚠️ Integração libvirt/attach de VMs
 - ⚠️ Netplan parsing e rotas conectadas/estáticas
+- ⚠️ Políticas de import/export (`allow/deny`, `include_connected`, `include_netplan_static`)
 
 ### Ainda não funciona (resumo rápido)
 
-- ❌ TLS efetivo no gRPC (`security.control_plane.tls` ainda não é aplicado)
-- ❌ Políticas de import/export (`allow/deny/accept_all`, `export_all`, `include_connected`, `include_netplan_static`)
+- ❌ Políticas avançadas de import/export (`allow/deny/accept_all`, `export_all`)
 - ❌ Validação de PSK entre peers
 - ❌ Integração libvirt (attach automático de VMs)
 
@@ -455,15 +456,21 @@ vagrant ssh host-c
 sudo nnetd -config /etc/n-netman/n-netman.yaml
 ```
 
-Aguarde ~5 segundos e verifique as rotas aprendidas:
+Aguarde ~30 segundos e verifique as rotas aprendidas:
 
 ```bash
-# Em qualquer VM
-ip route show table 100
+# Em qualquer VM - verificar ambas as tabelas
+ip route show table 100   # Production overlay routes
+ip route show table 200   # Management overlay routes
 
 # Saída esperada (ex: em host-a):
-# 172.16.20.0/24 via <next-hop> dev br-nnet-100 proto 99
-# 172.16.30.0/24 via <next-hop> dev br-nnet-100 proto 99
+# Table 100 (Production - VNI 100):
+# 172.16.20.0/24 via 10.100.0.2 dev br-prod proto openr metric 100
+# 172.16.30.0/24 via 10.100.0.3 dev br-prod proto openr metric 100
+
+# Table 200 (Management - VNI 200):
+# 10.200.20.0/24 via 10.200.1.2 dev br-mgmt proto openr metric 200
+# 10.200.30.0/24 via 10.200.1.3 dev br-mgmt proto openr metric 200
 ```
 
 ### Script de Validação
@@ -623,30 +630,28 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 ### Não Funcional
 | Item | Status | Descrição |
 |------|--------|-----------|
-| **TLS no gRPC** | ❌ | Comunicação entre peers não é criptografada |
 | **Validação de PSK** | ❌ | Chaves PSK são lidas mas não validadas |
 | **Integração libvirt** | ❌ | Attach automático de VMs não implementado |
 | **Netplan parsing** | ❌ | Rotas do netplan não são lidas automaticamente |
-| **Políticas de import/export** | ❌ | `allow/deny/accept_all`, `export_all`, `include_connected`, `include_netplan_static` ainda não são aplicados no daemon |
-| **Config TLS** | ❌ | `security.control_plane.tls` ainda não é usado |
+| **Políticas de import/export** | ❌ | `allow/deny`, `include_connected`, `include_netplan_static` ainda não são aplicados |
 
-### Parcialmente Funcional
+### Funcional
 | Item | Status | Descrição |
 |------|--------|-----------|
 | **VXLAN/Bridge** | ✅ | Criação funciona (requer root) |
 | **FDB entries** | ✅ | Sincronização de peers funciona |
 | **Troca de rotas gRPC** | ✅ | Handlers implementados, rotas instaladas |
+| **TLS/mTLS** | ✅ | Comunicação gRPC criptografada entre peers |
+| **Multi-Overlay** | ✅ | VNI-aware routing com tabelas independentes por overlay |
 | **Reconciler** | ✅ | Loop funciona |
 | **Métricas** | ⚠️ | Servidor inicia, mas métricas não são atualizadas |
 | **Healthcheck** | ✅ | Endpoints funcionam |
-| **Status de peers** | ⚠️ | Health check implementado, status pode demorar |
-| **Multi-Overlay** | ⚠️ | VXLAN/bridge por VNI ok, mas import table/lease ainda usa config global |
+| **Status de peers** | ✅ | Health check implementado com keepalive |
 
 ### Próximas Prioridades
-1. Adicionar TLS ao control plane
-2. Testes de integração com VMs reais em lab
-3. Validação de PSK entre peers
-4. Integração com libvirt para attach automático de VMs
+1. Testes de integração com VMs reais em lab
+2. Validação de PSK entre peers
+3. Integração com libvirt para attach automático de VMs
 
 ---
 
