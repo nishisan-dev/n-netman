@@ -1,0 +1,42 @@
+@startuml libvirt_integration
+!theme plain
+skinparam backgroundColor white
+skinparam handwritten false
+
+title Fluxo de Integração n-netman + libvirt
+
+participant "Operador" as op
+participant "nnet CLI" as cli
+participant "virsh" as virsh
+participant "libvirtd" as libvirt
+participant "VM" as vm
+
+== Configurar Dependência Systemd ==
+op -> cli: nnet libvirt enable
+cli -> cli: Cria drop-in\n/etc/systemd/system/libvirt.service.d/n-netman.conf
+cli -> cli: systemctl daemon-reload
+cli --> op: ✓ Configurado
+
+note over cli,libvirt
+  Após enable, no boot:
+  n-netman.service starts → cria bridges
+  libvirt.service starts → VMs encontram bridges
+end note
+
+== Attach Interface ==
+op -> cli: nnet libvirt attach web-01 --bridge br-prod
+cli -> cli: Valida bridge existe
+cli -> virsh: attach-interface web-01 bridge br-prod\n--model virtio --config --live
+virsh -> libvirt: Atualiza domain XML
+libvirt -> vm: Hot-plug vNIC
+virsh --> cli: Success
+cli --> op: ✓ MAC: 52:54:00:xx:xx:xx
+
+== Detach Interface ==
+op -> cli: nnet libvirt detach web-01 --mac 52:54:00:xx:xx:xx
+cli -> virsh: detach-interface web-01 bridge\n--mac 52:54:00:xx:xx:xx --config --live
+virsh -> libvirt: Remove do domain XML
+libvirt -> vm: Remove vNIC
+cli --> op: ✓ Interface removida
+
+@enduml
