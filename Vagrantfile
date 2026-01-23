@@ -184,6 +184,8 @@ overlays:
           table: 100
           flush_on_peer_down: true
           route_lease_seconds: 30
+          lookup_rules:
+            enabled: true
 
   - vni: 200
     name: "vxlan-mgmt"
@@ -205,6 +207,8 @@ overlays:
           table: 200
           flush_on_peer_down: true
           route_lease_seconds: 30
+          lookup_rules:
+            enabled: true
 
 # Legacy peers section (required for FDB sync)
 overlay:
