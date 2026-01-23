@@ -1,0 +1,21 @@
+[Unit]
+Description=n-netman VXLAN Overlay Manager
+Documentation=https://github.com/nishisan-dev/n-netman
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nnetd -config /etc/n-netman/n-netman.yaml
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=no
+ProtectSystem=false
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
