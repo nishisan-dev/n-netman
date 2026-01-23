@@ -220,10 +220,18 @@ type ImportConfig struct {
 
 // InstallConfig defines how imported routes are installed.
 type InstallConfig struct {
-	Table             int  `yaml:"table" validate:"omitempty,min=1,max=252"`
-	ReplaceExisting   bool `yaml:"replace_existing"`
-	FlushOnPeerDown   bool `yaml:"flush_on_peer_down"`
-	RouteLeaseSeconds int  `yaml:"route_lease_seconds"`
+	Table             int               `yaml:"table" validate:"omitempty,min=1,max=252"`
+	ReplaceExisting   bool              `yaml:"replace_existing"`
+	FlushOnPeerDown   bool              `yaml:"flush_on_peer_down"`
+	RouteLeaseSeconds int               `yaml:"route_lease_seconds"`
+	LookupRules       LookupRulesConfig `yaml:"lookup_rules"`
+}
+
+// LookupRulesConfig defines policy-based routing rules (ip rule).
+// When enabled, creates rules like: ip rule add iif <bridge> lookup <table>
+type LookupRulesConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Mode    string `yaml:"mode" validate:"omitempty,oneof=interface prefix"` // "interface" (default) or "prefix"
 }
 
 // TopologyConfig defines the network topology mode.
