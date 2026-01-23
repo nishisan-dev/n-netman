@@ -269,6 +269,8 @@ overlays:
         accept_all: true
         install:
           table: 100
+          lookup_rules:
+            enabled: true          # ← Cria rules de PBR automaticamente
 
   # Management Overlay (VNI 200)
   - vni: 200
@@ -292,6 +294,8 @@ overlays:
         accept_all: true
         install:
           table: 200
+          lookup_rules:
+            enabled: true          # ← Cria rules de PBR automaticamente
 
 # Peers (shared across overlays)
 overlay:
@@ -300,6 +304,28 @@ overlay:
       endpoint:
         address: "192.168.56.12"
 ```
+
+### Policy-Based Routing (`lookup_rules`) 🆕
+
+Quando `lookup_rules.enabled: true`, o n-netman cria automaticamente regras `ip rule` para direcionar tráfego da bridge para a tabela de roteamento correta:
+
+```bash
+# Regras criadas automaticamente para br-prod (table 100):
+ip rule add iif br-prod lookup 100 priority 100
+ip rule add oif br-prod lookup 100 priority 101
+
+# Regras criadas automaticamente para br-mgmt (table 200):
+ip rule add iif br-mgmt lookup 200 priority 100
+ip rule add oif br-mgmt lookup 200 priority 101
+```
+
+**Por que isso é importante?**
+
+Sem essas regras, o kernel Linux consulta apenas a `table main` para decisões de roteamento. Com `lookup_rules` habilitado:
+
+1. Tráfego **entrando** por `br-prod` (iif) → consulta `table 100`
+2. Tráfego **saindo** por `br-prod` (oif) → consulta `table 100`
+3. Isolamento completo entre overlays — cada um usa sua própria tabela
 
 Veja o exemplo completo em [`examples/multi-overlay.yaml`](examples/multi-overlay.yaml).
 
