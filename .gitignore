@@ -44,3 +44,4 @@ __debug_bin*
 
 # Build artifacts
 bin/
+.vagrant-certs/
