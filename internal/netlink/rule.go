@@ -3,6 +3,9 @@ package netlink
 
 import (
 	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
 
 	"github.com/vishvananda/netlink"
 )
@@ -13,6 +16,10 @@ const RulePriority = 100
 
 // EnsureRuleByInterface creates policy rules for a bridge interface.
 // Creates both iif (input) and oif (output) rules pointing to the table.
+//
+// NOTE: We use 'ip rule add' command directly instead of vishvananda/netlink
+// library's RuleAdd due to issues where RuleAdd returns "invalid argument"
+// for rules with iif/oif. This is similar to the FDB workaround.
 func EnsureRuleByInterface(bridgeName string, table int) error {
 	// Verify interface exists
 	_, err := netlink.LinkByName(bridgeName)
@@ -20,26 +27,35 @@ func EnsureRuleByInterface(bridgeName string, table int) error {
 		return fmt.Errorf("failed to find interface %s: %w", bridgeName, err)
 	}
 
-	// Create iif rule: ip rule add iif <bridge> lookup <table>
-	iifRule := &netlink.Rule{
-		Family:   netlink.FAMILY_V4,
-		IifName:  bridgeName,
-		Table:    table,
-		Priority: RulePriority,
-	}
-	if err := ensureRule(iifRule); err != nil {
+	// Create iif rule: ip rule add iif <bridge> lookup <table> priority <prio>
+	if err := addRuleViaCLI("iif", bridgeName, table, RulePriority); err != nil {
 		return fmt.Errorf("failed to create iif rule for %s: %w", bridgeName, err)
 	}
 
-	// Create oif rule: ip rule add oif <bridge> lookup <table>
-	oifRule := &netlink.Rule{
-		Family:   netlink.FAMILY_V4,
-		OifName:  bridgeName,
-		Table:    table,
-		Priority: RulePriority + 1,
-	}
-	if err := ensureRule(oifRule); err != nil {
+	// Create oif rule: ip rule add oif <bridge> lookup <table> priority <prio>
+	if err := addRuleViaCLI("oif", bridgeName, table, RulePriority+1); err != nil {
 		return fmt.Errorf("failed to create oif rule for %s: %w", bridgeName, err)
+	}
+
+	return nil
+}
+
+// addRuleViaCLI adds a policy rule using the ip command.
+func addRuleViaCLI(direction, ifname string, table, priority int) error {
+	// ip rule add iif/oif <ifname> lookup <table> priority <priority>
+	cmd := exec.Command("ip", "rule", "add",
+		direction, ifname,
+		"lookup", strconv.Itoa(table),
+		"priority", strconv.Itoa(priority))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		outputStr := strings.TrimSpace(string(output))
+		// Check if rule already exists
+		if strings.Contains(outputStr, "File exists") {
+			return nil
+		}
+		return fmt.Errorf("ip rule add failed: %s: %w", outputStr, err)
 	}
 
 	return nil
@@ -48,61 +64,37 @@ func EnsureRuleByInterface(bridgeName string, table int) error {
 // DeleteRulesByInterface removes policy rules for a bridge interface.
 func DeleteRulesByInterface(bridgeName string, table int) error {
 	// Delete iif rule
-	iifRule := &netlink.Rule{
-		IifName:  bridgeName,
-		Table:    table,
-		Priority: RulePriority,
-	}
-	if err := netlink.RuleDel(iifRule); err != nil {
-		// Ignore "no such process" error (rule doesn't exist)
-		if err.Error() != "no such process" {
-			return fmt.Errorf("failed to delete iif rule for %s: %w", bridgeName, err)
-		}
+	if err := deleteRuleViaCLI("iif", bridgeName, table, RulePriority); err != nil {
+		return fmt.Errorf("failed to delete iif rule for %s: %w", bridgeName, err)
 	}
 
 	// Delete oif rule
-	oifRule := &netlink.Rule{
-		OifName:  bridgeName,
-		Table:    table,
-		Priority: RulePriority + 1,
-	}
-	if err := netlink.RuleDel(oifRule); err != nil {
-		if err.Error() != "no such process" {
-			return fmt.Errorf("failed to delete oif rule for %s: %w", bridgeName, err)
-		}
+	if err := deleteRuleViaCLI("oif", bridgeName, table, RulePriority+1); err != nil {
+		return fmt.Errorf("failed to delete oif rule for %s: %w", bridgeName, err)
 	}
 
 	return nil
 }
 
-// ensureRule creates a rule if it doesn't exist.
-func ensureRule(rule *netlink.Rule) error {
-	// Check if rule already exists
-	rules, err := netlink.RuleList(netlink.FAMILY_V4)
+// deleteRuleViaCLI removes a policy rule using the ip command.
+func deleteRuleViaCLI(direction, ifname string, table, priority int) error {
+	cmd := exec.Command("ip", "rule", "del",
+		direction, ifname,
+		"lookup", strconv.Itoa(table),
+		"priority", strconv.Itoa(priority))
+
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to list rules: %w", err)
-	}
-
-	for _, r := range rules {
-		if rulesEqual(&r, rule) {
-			return nil // Rule already exists
+		outputStr := strings.TrimSpace(string(output))
+		// Ignore "No such process" (rule doesn't exist)
+		if strings.Contains(outputStr, "No such process") ||
+			strings.Contains(outputStr, "No such file or directory") {
+			return nil
 		}
-	}
-
-	// Create the rule
-	if err := netlink.RuleAdd(rule); err != nil {
-		return fmt.Errorf("failed to add rule: %w", err)
+		return fmt.Errorf("ip rule del failed: %s: %w", outputStr, err)
 	}
 
 	return nil
-}
-
-// rulesEqual checks if two rules are functionally equivalent.
-func rulesEqual(a, b *netlink.Rule) bool {
-	return a.Table == b.Table &&
-		a.IifName == b.IifName &&
-		a.OifName == b.OifName &&
-		a.Priority == b.Priority
 }
 
 // ListRulesByTable returns all rules pointing to a specific table.
