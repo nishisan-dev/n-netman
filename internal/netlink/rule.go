@@ -14,15 +14,15 @@ const RulePriority = 100
 // EnsureRuleByInterface creates policy rules for a bridge interface.
 // Creates both iif (input) and oif (output) rules pointing to the table.
 func EnsureRuleByInterface(bridgeName string, table int) error {
-	// Get interface index
-	link, err := netlink.LinkByName(bridgeName)
+	// Verify interface exists
+	_, err := netlink.LinkByName(bridgeName)
 	if err != nil {
 		return fmt.Errorf("failed to find interface %s: %w", bridgeName, err)
 	}
-	ifIndex := link.Attrs().Index
 
 	// Create iif rule: ip rule add iif <bridge> lookup <table>
 	iifRule := &netlink.Rule{
+		Family:   netlink.FAMILY_V4,
 		IifName:  bridgeName,
 		Table:    table,
 		Priority: RulePriority,
@@ -33,11 +33,11 @@ func EnsureRuleByInterface(bridgeName string, table int) error {
 
 	// Create oif rule: ip rule add oif <bridge> lookup <table>
 	oifRule := &netlink.Rule{
+		Family:   netlink.FAMILY_V4,
 		OifName:  bridgeName,
 		Table:    table,
 		Priority: RulePriority + 1,
 	}
-	_ = ifIndex // Used for validation only
 	if err := ensureRule(oifRule); err != nil {
 		return fmt.Errorf("failed to create oif rule for %s: %w", bridgeName, err)
 	}
