@@ -26,6 +26,7 @@ Documentação completa do n-netman, um agente leve para overlays VXLAN L3/L2 em
 | [configuration.md](configuration.md) | Estrutura completa do arquivo YAML |
 | [cli.md](cli.md) | Comandos disponíveis e exemplos de uso |
 | [observability.md](observability.md) | Logs, métricas, healthchecks e troubleshooting |
+| [libvirt.md](libvirt.md) | Integração com KVM/libvirt para attach de VMs |
 
 ## Quick Start
 
@@ -56,6 +57,7 @@ Os diagramas de arquitetura estão em [diagrams/](diagrams/):
 - `reconciler-loop.puml` — Fluxo do loop de reconciliação
 - `route-exchange.puml` — Troca de rotas entre peers
 - `topology.puml` — Topologia de rede
+- `libvirt_integration.puml` — Fluxo de integração com libvirt
 
 ## Convenções
 
