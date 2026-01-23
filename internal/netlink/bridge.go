@@ -32,7 +32,7 @@ func (m *BridgeManager) Create(cfg BridgeConfig) error {
 			// Already exists as a bridge, just ensure it's up
 			return netlink.LinkSetUp(existing)
 		}
-		// Wrong type, delete and recreate
+		// Wrong type, delete and recreate (destructive but keeps name consistent).
 		if err := netlink.LinkDel(existing); err != nil {
 			return fmt.Errorf("failed to delete existing interface %s: %w", cfg.Name, err)
 		}

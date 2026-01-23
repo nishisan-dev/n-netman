@@ -286,6 +286,7 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 			Metric:       r.Metric,
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
+			VNI:          r.Vni,
 			PeerID:       req.NodeId,
 		}
 		s.routeTable.Add(route)
@@ -315,6 +316,7 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 			Metric:       r.Metric,
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
+			Vni:          r.VNI,
 		})
 	}
 
@@ -343,6 +345,7 @@ func (s *Server) AnnounceRoutes(ctx context.Context, req *pb.RouteAnnouncement) 
 			Metric:       r.Metric,
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
+			VNI:          r.Vni,
 			PeerID:       req.NodeId,
 		}
 		s.routeTable.Add(route)
@@ -581,6 +584,7 @@ func (c *Client) ExchangeStateWithPeers(ctx context.Context, localRoutes []Route
 			Metric:       r.Metric,
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
+			Vni:          r.VNI,
 		})
 	}
 
@@ -618,6 +622,7 @@ func (c *Client) exchangeWithPeer(ctx context.Context, pc *peerConn, req *pb.Sta
 			Metric:       r.Metric,
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
+			VNI:          r.Vni,
 			PeerID:       resp.NodeId,
 		}
 		c.routeTable.Add(route)
@@ -665,6 +670,7 @@ func (c *Client) AnnounceRoutes(ctx context.Context, routes []Route) error {
 			Metric:       r.Metric,
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
+			Vni:          r.VNI,
 		})
 	}
 

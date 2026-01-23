@@ -42,7 +42,7 @@ func (m *VXLANManager) Create(cfg VXLANConfig) error {
 				return netlink.LinkSetUp(existing)
 			}
 		}
-		// Wrong type or wrong VNI, delete and recreate
+		// Wrong type or wrong VNI, delete and recreate (keeps config canonical).
 		if err := netlink.LinkDel(existing); err != nil {
 			return fmt.Errorf("failed to delete existing interface %s: %w", cfg.Name, err)
 		}
@@ -77,7 +77,7 @@ func (m *VXLANManager) Create(cfg VXLANConfig) error {
 		vxlan.Group = cfg.Group
 	}
 
-	// Set VTEP device index if provided (helps kernel route encapsulated packets)
+	// Set VTEP device index if provided (helps kernel route encapsulated packets).
 	if cfg.VtepDev != "" {
 		if vtepLink, err := netlink.LinkByName(cfg.VtepDev); err == nil {
 			vxlan.VtepDevIndex = vtepLink.Attrs().Index

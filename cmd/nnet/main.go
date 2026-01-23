@@ -200,7 +200,7 @@ func statusCmd() *cobra.Command {
 			}
 			_ = vxlanFound // silence unused variable
 
-			// Try to get live status from daemon
+			// Try to get live status from daemon (best-effort).
 			daemonStatus := getDaemonStatus(cfg)
 
 			fmt.Println()
@@ -321,6 +321,7 @@ func formatPrefixList(prefixes []string) string {
 }
 
 // getDaemonStatus fetches status from the nnetd daemon's /status endpoint.
+// It only targets the local healthcheck listener.
 func getDaemonStatus(cfg *config.Config) *observability.NodeStatus {
 	port := cfg.Observability.Healthcheck.Listen.Port
 	if port == 0 {

@@ -379,12 +379,30 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 	healthTicker := time.NewTicker(30 * time.Second)
 	defer healthTicker.Stop()
 
-	// Get table for route cleanup
-	table := cfg.Routing.Import.Install.Table
-	if table == 0 {
-		table = 100
+	// Build a VNI -> table mapping from overlays for route cleanup
+	vniToTable := make(map[uint32]int)
+	for _, overlay := range cfg.GetOverlays() {
+		table := overlay.Routing.Import.Install.Table
+		if table == 0 {
+			table = 100 // default
+		}
+		vniToTable[uint32(overlay.VNI)] = table
+	}
+
+	// Default table for routes with unknown VNI
+	defaultTable := cfg.Routing.Import.Install.Table
+	if defaultTable == 0 {
+		defaultTable = 100
 	}
 	flushOnPeerDown := cfg.Routing.Import.Install.FlushOnPeerDown
+
+	// Helper to get table for a route based on its VNI
+	getTableForRoute := func(r controlplane.Route) int {
+		if table, ok := vniToTable[r.VNI]; ok {
+			return table
+		}
+		return defaultTable
+	}
 
 	for {
 		select {
@@ -407,19 +425,22 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 						if err != nil {
 							continue
 						}
+						routeTable := getTableForRoute(r)
 						if err := routeMgr.Delete(nlmgr.RouteConfig{
 							Destination: ipnet,
-							Table:       table,
+							Table:       routeTable,
 						}); err != nil {
 							logger.Warn("failed to delete route for down peer",
 								"prefix", r.Prefix,
 								"peer", peerID,
+								"table", routeTable,
 								"error", err,
 							)
 						} else {
 							logger.Info("removed route for down peer",
 								"prefix", r.Prefix,
 								"peer", peerID,
+								"table", routeTable,
 							)
 						}
 					}
@@ -439,19 +460,22 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 				if err != nil {
 					continue
 				}
+				routeTable := getTableForRoute(r)
 				if err := routeMgr.Delete(nlmgr.RouteConfig{
 					Destination: ipnet,
-					Table:       table,
+					Table:       routeTable,
 				}); err != nil {
 					logger.Warn("failed to delete expired route",
 						"prefix", r.Prefix,
 						"peer", r.PeerID,
+						"table", routeTable,
 						"error", err,
 					)
 				} else {
 					logger.Info("removed expired route",
 						"prefix", r.Prefix,
 						"peer", r.PeerID,
+						"table", routeTable,
 					)
 				}
 			}

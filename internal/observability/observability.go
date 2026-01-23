@@ -314,7 +314,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Build status response
+	// Build a snapshot status response (no live streaming).
 	status := NodeStatus{
 		NodeID: s.cfg.Node.ID,
 		Uptime: time.Since(s.startTime).Round(time.Second).String(),
@@ -327,7 +327,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status.Peers = provider.GetPeerStatuses()
 		status.Routes = provider.GetRouteStats()
 	} else {
-		// Fallback: show configured peers with unknown status
+		// Fallback: show configured peers with unknown status when daemon is offline.
 		for _, peer := range s.cfg.Overlay.Peers {
 			status.Peers[peer.ID] = PeerStatus{
 				ID:       peer.ID,

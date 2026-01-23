@@ -87,7 +87,7 @@ func (m *FDBManager) Delete(entry FDBEntry) error {
 	}
 
 	if err := netlink.NeighDel(neigh); err != nil {
-		// Ignore errors (entry might not exist)
+		// Ignore errors (entry might not exist).
 		return nil
 	}
 

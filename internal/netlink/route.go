@@ -207,7 +207,7 @@ func (m *RouteManager) Sync(table int, desired []RouteConfig) error {
 		return err
 	}
 
-	// Build set of current routes by destination
+	// Build set of current routes by destination for quick diff.
 	currentSet := make(map[string]RouteInfo)
 	for _, r := range current {
 		if r.Destination != nil {
@@ -215,7 +215,7 @@ func (m *RouteManager) Sync(table int, desired []RouteConfig) error {
 		}
 	}
 
-	// Build set of desired routes
+	// Build set of desired routes for diffing removals.
 	desiredSet := make(map[string]RouteConfig)
 	for _, r := range desired {
 		if r.Destination != nil {
