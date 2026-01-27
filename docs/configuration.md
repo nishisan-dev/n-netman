@@ -325,8 +325,18 @@ security:
 | `tls.skip_verify` | bool | false | Ignora verificação de certificado |
 
 **Geração de certificados:**
+
 ```bash
-./scripts/gen-certs.sh /etc/n-netman/tls
+# 1. Gerar CA
+nnet cert init-ca --output-dir /etc/n-netman/tls
+
+# 2. Gerar certificado do host
+nnet cert gen-host \
+  --host $HOSTNAME \
+  --ip <IP-UNDERLAY> \
+  --ca-cert /etc/n-netman/tls/ca.crt \
+  --ca-key /etc/n-netman/tls/ca.key \
+  --output-dir /etc/n-netman/tls
 ```
 
 ---

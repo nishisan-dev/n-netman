@@ -114,7 +114,7 @@ O coração do agente. Executa em loop contínuo:
                     └─────────────────┘
 ```
 
-O intervalo padrão é 5 segundos. Cada ciclo:
+O intervalo padrão é 10 segundos. Cada ciclo:
 1. Garante que bridges existem com configuração correta
 2. Garante que interfaces VXLAN existem e estão attached às bridges
 3. Sincroniza FDB entries para peers (modo head-end-replication)

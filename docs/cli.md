@@ -213,7 +213,34 @@ Overall Status: ✅ HEALTHY (1 warning)
 - Quando há problemas de conectividade
 - Antes de reportar bugs
 
-**Requer root:** Parcialmente (algumas verificações precisam de root)
+---
+
+### nnet cert
+
+Gerencia PKI interna e gera certificados mTLS.
+
+**Subcomandos:**
+
+#### `nnet cert init-ca`
+Inicializa uma nova CA raiz.
+
+```bash
+nnet cert init-ca --output-dir /etc/n-netman/certs --days 3650
+```
+
+#### `nnet cert gen-host`
+Gera certificado de host assinado pela CA.
+
+```bash
+nnet cert gen-host \
+  --host node-1 \
+  --ip 192.168.1.10,10.0.0.1 \
+  --ca-cert /etc/n-netman/certs/ca.crt \
+  --ca-key /etc/n-netman/certs/ca.key \
+  --output-dir /etc/n-netman/certs
+```
+
+**Requer root:** Não (mas requer permissão de escrita no diretório de saída)
 
 ---
 

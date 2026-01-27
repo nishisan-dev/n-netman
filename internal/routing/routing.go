@@ -83,8 +83,8 @@ func (m *Manager) GetExportRoutesForOverlay(overlay config.OverlayDef) []control
 			Prefix: network,
 			Metric: metric,
 			VNI:    uint32(overlay.VNI),
-		// NextHop will be set based on overlay bridge IP.
-	})
+			// NextHop will be set based on overlay bridge IP.
+		})
 	}
 
 	return routes

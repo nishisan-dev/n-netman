@@ -235,6 +235,23 @@ openssl rand -hex 32 | sudo tee /etc/n-netman/psk/host-b-01.key
 sudo chmod 600 /etc/n-netman/psk/*.key
 ```
 
+### Certificados mTLS (Recomendado)
+
+O `nnet` possui utilitários embutidos para gerenciar PKI:
+
+```bash
+# 1. Gerar CA Raiz
+nnet cert init-ca --output-dir /etc/n-netman/tls
+
+# 2. Gerar certificado para este nó
+nnet cert gen-host \
+  --host $(hostname) \
+  --ip 192.168.56.11 \
+  --ca-cert /etc/n-netman/tls/ca.crt \
+  --ca-key /etc/n-netman/tls/ca.key \
+  --output-dir /etc/n-netman/tls
+```
+
 ### Multi-Overlay (Config v2) 🆕
 
 A partir da versão 2 do config, você pode definir múltiplos overlays VXLAN, cada um com seu próprio routing:
@@ -555,7 +572,7 @@ vagrant ssh host-b
 
 ### Métricas Prometheus
 
-Disponíveis em `http://127.0.0.1:9109/metrics`. Nota: métricas registradas, mas a atualização ainda não está implementada (exceto `peers_configured`).
+Disponíveis em `http://127.0.0.1:9109/metrics`. As seguintes métricas são coletadas e exportadas:
 
 | Métrica | Descrição |
 |---------|-----------|
@@ -699,7 +716,7 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 | **TLS/mTLS** | ✅ | Comunicação gRPC criptografada entre peers |
 | **Multi-Overlay** | ✅ | VNI-aware routing com tabelas independentes por overlay |
 | **Reconciler** | ✅ | Loop funciona |
-| **Métricas** | ⚠️ | Servidor inicia, mas métricas não são atualizadas |
+| **Métricas** | ✅ | Servidor Prometheus ativo e métricas coletadas |
 | **Healthcheck** | ✅ | Endpoints funcionam |
 | **Status de peers** | ✅ | Health check implementado com keepalive |
 | **Integração libvirt** | ✅ | CLI `nnet libvirt` para attach/detach de VMs |
