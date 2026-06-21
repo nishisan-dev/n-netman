@@ -19,6 +19,7 @@ import (
 	nlmgr "github.com/nishisan-dev/n-netman/internal/netlink"
 	"github.com/nishisan-dev/n-netman/internal/observability"
 	"github.com/nishisan-dev/n-netman/internal/reconciler"
+	"github.com/nishisan-dev/n-netman/internal/routing"
 )
 
 var (
@@ -96,12 +97,15 @@ func main() {
 	// Initialize route manager for installing routes learned from peers.
 	routeMgr := nlmgr.NewRouteManager()
 
+	// Routing policy engine (import allow/deny enforcement).
+	routingMgr := routing.NewManager(cfg)
+
 	// Initialize route table for control plane
 	routeTable := controlplane.NewRouteTable()
 
 	// Create route installer callback (control plane -> kernel).
 	routeInstaller := func(routes []controlplane.Route) {
-		installReceivedRoutes(cfg, routeMgr, routes, logger)
+		installReceivedRoutes(cfg, routeMgr, routingMgr, routes, logger)
 	}
 
 	// Start gRPC control plane server
@@ -180,16 +184,13 @@ func main() {
 }
 
 // installReceivedRoutes installs routes received from peers into the kernel.
-// Each route is installed in the table of its corresponding overlay (by VNI).
-func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, routes []controlplane.Route, logger *slog.Logger) {
-	// Build a VNI -> table mapping from overlays
-	vniToTable := make(map[uint32]int)
+// Each route is filtered by its overlay's import policy and installed in the
+// table of its corresponding overlay (by VNI).
+func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, routingMgr *routing.Manager, routes []controlplane.Route, logger *slog.Logger) {
+	// Build a VNI -> overlay mapping so we can apply the right import policy/table.
+	vniToOverlay := make(map[uint32]config.OverlayDef)
 	for _, overlay := range cfg.GetOverlays() {
-		table := overlay.Routing.Import.Install.Table
-		if table == 0 {
-			table = 100 // default
-		}
-		vniToTable[uint32(overlay.VNI)] = table
+		vniToOverlay[uint32(overlay.VNI)] = overlay
 	}
 
 	for _, r := range routes {
@@ -214,18 +215,34 @@ func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, rou
 			continue
 		}
 
-		// Get the routing table based on the route's VNI
-		table, ok := vniToTable[r.VNI]
-		if !ok {
-			// Fallback: use legacy global table if VNI not found
+		// Apply the import policy and resolve the destination table for this VNI.
+		overlay, ok := vniToOverlay[r.VNI]
+		var (
+			allowed bool
+			table   int
+		)
+		if ok {
+			allowed = routingMgr.ShouldImportForOverlay(r, overlay)
+			table = overlay.Routing.Import.Install.Table
+		} else {
+			// Unknown VNI: fall back to the global import policy/table.
+			allowed = routingMgr.ShouldImport(r)
 			table = cfg.Routing.Import.Install.Table
-			if table == 0 {
-				table = 100
-			}
-			logger.Debug("route VNI not found in overlays, using default table",
+			logger.Debug("route VNI not found in overlays, using global import policy/table",
 				"vni", r.VNI,
-				"table", table,
 			)
+		}
+		if table == 0 {
+			table = 100 // default
+		}
+
+		if !allowed {
+			logger.Info("route rejected by import policy",
+				"prefix", r.Prefix,
+				"peer", r.PeerID,
+				"vni", r.VNI,
+			)
+			continue
 		}
 
 		// Install the route
