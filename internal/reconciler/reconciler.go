@@ -13,6 +13,7 @@ import (
 
 	"github.com/nishisan-dev/n-netman/internal/config"
 	nlink "github.com/nishisan-dev/n-netman/internal/netlink"
+	"github.com/nishisan-dev/n-netman/internal/observability"
 	"github.com/vishvananda/netlink"
 )
 
@@ -26,6 +27,7 @@ type Reconciler struct {
 
 	interval time.Duration
 	logger   *slog.Logger
+	metrics  *observability.Metrics
 
 	mu      sync.RWMutex
 	running bool
@@ -66,6 +68,13 @@ func WithInterval(d time.Duration) Option {
 func WithLogger(l *slog.Logger) Option {
 	return func(r *Reconciler) {
 		r.logger = l
+	}
+}
+
+// WithMetrics wires Prometheus metrics into the reconciler.
+func WithMetrics(m *observability.Metrics) Option {
+	return func(r *Reconciler) {
+		r.metrics = m
 	}
 }
 
@@ -110,9 +119,15 @@ func (r *Reconciler) Run(ctx context.Context) error {
 
 // Reconcile performs a single reconciliation cycle.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
+	start := time.Now()
 	r.mu.Lock()
-	r.lastRun = time.Now()
+	r.lastRun = start
 	r.mu.Unlock()
+
+	if r.metrics != nil {
+		r.metrics.ReconciliationsTotal.Inc()
+		defer func() { r.metrics.ReconciliationDuration.Observe(time.Since(start).Seconds()) }()
+	}
 
 	r.logger.Debug("starting reconciliation")
 
@@ -134,15 +149,45 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 	}
 
+	r.updateNetworkMetrics(overlays)
+
 	if len(errs) > 0 {
 		err := errors.Join(errs...)
 		r.setError(err)
+		if r.metrics != nil {
+			r.metrics.ReconciliationErrors.Inc()
+		}
 		return err
 	}
 
 	r.logger.Debug("reconciliation complete", "overlay_count", len(overlays))
 	r.setError(nil)
+	if r.metrics != nil {
+		r.metrics.LastReconcileTime.SetToCurrentTime()
+	}
 	return nil
+}
+
+// updateNetworkMetrics refreshes the active-resource gauges from kernel state.
+func (r *Reconciler) updateNetworkMetrics(overlays []config.OverlayDef) {
+	if r.metrics == nil {
+		return
+	}
+	var vxlans, bridges, fdbEntries int
+	for _, o := range overlays {
+		if r.vxlan.Exists(o.Name) {
+			vxlans++
+		}
+		if r.bridge.Exists(o.Bridge.Name) {
+			bridges++
+		}
+		if entries, err := r.fdb.List(o.Name); err == nil {
+			fdbEntries += len(entries)
+		}
+	}
+	r.metrics.VXLANsActive.Set(float64(vxlans))
+	r.metrics.BridgesActive.Set(float64(bridges))
+	r.metrics.FDBEntriesTotal.Set(float64(fdbEntries))
 }
 
 // reconcileOverlay reconciles a single overlay (bridge, VXLAN, FDB).

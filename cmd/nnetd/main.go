@@ -142,7 +142,7 @@ func main() {
 		}
 
 		// Start periodic health checks and route refresh loop.
-		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, routeMgr, logger)
+		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, routeMgr, metrics, logger)
 	}()
 	defer cpClient.Disconnect()
 
@@ -150,7 +150,13 @@ func main() {
 	rec := reconciler.New(cfg,
 		reconciler.WithInterval(10*time.Second),
 		reconciler.WithLogger(logger),
+		reconciler.WithMetrics(metrics),
 	)
+
+	// /healthz reflects the reconciler's real state (last cycle had no error).
+	obsServer.SetHealthFunc(func() bool {
+		return rec.Status().LastErr == nil
+	})
 
 	go func() {
 		if err := rec.Run(ctx); err != nil && err != context.Canceled {
@@ -454,8 +460,30 @@ func deleteRoutesFromKernel(cfg *config.Config, routeMgr *nlmgr.RouteManager, ro
 	}
 }
 
+// updatePeerRouteMetrics refreshes the peer/route gauges from live client state.
+func updatePeerRouteMetrics(client *controlplane.Client, m *observability.Metrics) {
+	if m == nil {
+		return
+	}
+	var connected, healthy int
+	for _, ps := range client.GetPeerStatuses() {
+		if ps.Status != "disconnected" {
+			connected++
+		}
+		if ps.Status == "healthy" {
+			healthy++
+		}
+	}
+	m.PeersConnected.Set(float64(connected))
+	m.PeersHealthy.Set(float64(healthy))
+
+	rs := client.GetRouteStats()
+	m.RoutesExported.Set(float64(rs.Exported))
+	m.RoutesImported.Set(float64(rs.Installed))
+}
+
 // runRouteRefreshLoop periodically refreshes routes with peers.
-func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, routeMgr *nlmgr.RouteManager, logger *slog.Logger) {
+func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, routeMgr *nlmgr.RouteManager, metrics *observability.Metrics, logger *slog.Logger) {
 	// Refresh interval is half the lease time
 	leaseSecs := cfg.Routing.Import.Install.RouteLeaseSeconds
 	if leaseSecs <= 0 {
@@ -508,6 +536,9 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 			if len(expiredRoutes) > 0 {
 				logger.Info("expired stale routes", "count", len(expiredRoutes))
 			}
+
+			// Refresh peer/route gauges from live state.
+			updatePeerRouteMetrics(client, metrics)
 
 		case <-ticker.C:
 			// Re-announce our routes to peers

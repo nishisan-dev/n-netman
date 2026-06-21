@@ -4,6 +4,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -150,8 +151,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}, []string{"method"}),
 	}
 
-	// Register all metrics
-	reg.MustRegister(
+	// Register all metrics. Tolerate already-registered collectors (e.g. if the
+	// constructor is ever called twice) instead of panicking via MustRegister.
+	for _, c := range []prometheus.Collector{
 		m.ReconciliationsTotal,
 		m.ReconciliationErrors,
 		m.ReconciliationDuration,
@@ -166,7 +168,16 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.RoutesImported,
 		m.GRPCRequestsTotal,
 		m.GRPCRequestDuration,
-	)
+	} {
+		if err := reg.Register(c); err != nil {
+			var already prometheus.AlreadyRegisteredError
+			if errors.As(err, &already) {
+				continue
+			}
+			// A non-duplicate registration error is a programming error; surface it.
+			panic(fmt.Sprintf("failed to register metric: %v", err))
+		}
+	}
 
 	return m
 }
@@ -179,10 +190,11 @@ type Server struct {
 	healthServer   *http.Server
 	statusProvider StatusProvider
 
-	mu        sync.RWMutex
-	healthy   bool
-	ready     bool
-	startTime time.Time
+	mu         sync.RWMutex
+	healthy    bool
+	ready      bool
+	healthFunc func() bool
+	startTime  time.Time
 }
 
 // NewServer creates a new observability server.
@@ -201,6 +213,15 @@ func (s *Server) SetStatusProvider(provider StatusProvider) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statusProvider = provider
+}
+
+// SetHealthFunc registers a predicate that reflects the daemon's real health
+// (e.g. the reconciler's last error). /healthz reports healthy only when both
+// the manual healthy flag and this predicate are true.
+func (s *Server) SetHealthFunc(fn func() bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.healthFunc = fn
 }
 
 // Start starts the metrics and health check servers.
@@ -232,8 +253,12 @@ func (s *Server) startMetricsServer() error {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	s.metricsServer = &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -259,8 +284,12 @@ func (s *Server) startHealthServer() error {
 	mux.HandleFunc("/status", s.handleStatus)
 
 	s.healthServer = &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -276,7 +305,13 @@ func (s *Server) startHealthServer() error {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	healthy := s.healthy
+	fn := s.healthFunc
 	s.mu.RUnlock()
+
+	// Compose the manual flag with the real-state predicate when present.
+	if fn != nil {
+		healthy = healthy && fn()
+	}
 
 	if healthy {
 		w.WriteHeader(http.StatusOK)
@@ -328,7 +363,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status.Routes = provider.GetRouteStats()
 	} else {
 		// Fallback: show configured peers with unknown status when daemon is offline.
-		for _, peer := range s.cfg.Overlay.Peers {
+		for _, peer := range s.cfg.GetPeers() {
 			status.Peers[peer.ID] = PeerStatus{
 				ID:       peer.ID,
 				Endpoint: peer.Endpoint.Address,
@@ -336,8 +371,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				Routes:   0,
 			}
 		}
-		// Count exported routes from config
-		status.Routes.Exported = len(s.cfg.Routing.Export.Networks)
+		// Count exported routes across all overlays (v1 and v2).
+		for _, o := range s.cfg.GetOverlays() {
+			status.Routes.Exported += len(o.Routing.Export.Networks)
+		}
 	}
 
 	data, err := json.Marshal(status)
