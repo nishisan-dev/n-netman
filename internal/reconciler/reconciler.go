@@ -4,6 +4,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -122,12 +123,21 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	// Reconcile each overlay
+	// Reconcile each overlay independently: a failure in one overlay must not
+	// prevent the others from being reconciled.
+	var errs []error
 	for _, overlay := range overlays {
 		if err := r.reconcileOverlay(ctx, overlay); err != nil {
-			r.setError(err)
-			return fmt.Errorf("overlay %s (VNI %d) reconciliation failed: %w", overlay.Name, overlay.VNI, err)
+			r.logger.Error("overlay reconciliation failed",
+				"overlay", overlay.Name, "vni", overlay.VNI, "error", err)
+			errs = append(errs, fmt.Errorf("overlay %s (VNI %d): %w", overlay.Name, overlay.VNI, err))
 		}
+	}
+
+	if len(errs) > 0 {
+		err := errors.Join(errs...)
+		r.setError(err)
+		return err
 	}
 
 	r.logger.Debug("reconciliation complete", "overlay_count", len(overlays))

@@ -131,7 +131,7 @@ func main() {
 	go func() {
 		// Wait a bit for local setup before connecting to peers
 		time.Sleep(2 * time.Second)
-		if err := cpClient.ConnectToPeers(ctx); err != nil {
+		if err := cpClient.ConnectToPeers(); err != nil {
 			slog.Warn("failed to connect to some peers", "error", err)
 		}
 
@@ -171,6 +171,14 @@ func main() {
 	<-ctx.Done()
 
 	slog.Info("shutting down n-netman daemon")
+
+	// Stop reporting ready/healthy and stop the control plane BEFORE flushing
+	// routes, so an in-flight peer announcement cannot reinstall a route the
+	// flush just removed. The deferred Stop/Disconnect calls become no-ops.
+	obsServer.SetReady(false)
+	obsServer.SetHealthy(false)
+	cpServer.Stop()
+	cpClient.Disconnect()
 
 	// Cleanup: flush all routes installed by n-netman across every table used by
 	// the overlays (multi-overlay configs install into per-overlay tables).
@@ -471,6 +479,11 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 		case <-ctx.Done():
 			return
 		case <-healthTicker.C:
+			// Pick up any peers that were not connected yet (best-effort).
+			if err := client.ConnectToPeers(); err != nil {
+				logger.Debug("reconnect attempt had errors", "error", err)
+			}
+
 			// Check peer health and get newly unhealthy peers
 			downPeers, err := client.CheckPeerHealth(ctx)
 			if err != nil {
