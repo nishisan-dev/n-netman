@@ -116,18 +116,51 @@ func (c *Client) GetDomainInterfaces(name string) ([]Interface, error) {
 	return interfaces, nil
 }
 
-// AttachInterface adds a new network interface to a domain.
-// The interface is persisted and applied live if VM is running.
-func (c *Client) AttachInterface(domain, bridge, mac string) (string, error) {
+// IsRunning reports whether the domain is in the running state.
+func (c *Client) IsRunning(domain string) bool {
+	state, err := c.getDomainState(domain)
+	return err == nil && strings.TrimSpace(state) == "running"
+}
+
+// macsOnBridge returns the set of MAC addresses attached to the given bridge.
+func (c *Client) macsOnBridge(domain, bridge string) map[string]bool {
+	set := make(map[string]bool)
+	ifaces, err := c.GetDomainInterfaces(domain)
+	if err != nil {
+		return set
+	}
+	for _, i := range ifaces {
+		if i.Bridge == bridge {
+			set[i.MAC] = true
+		}
+	}
+	return set
+}
+
+// AttachInterface adds a new network interface to a domain. The interface is
+// always persisted (--config) and applied live (--live) only when the VM is
+// running, so attaching to a stopped VM does not fail. model defaults to virtio.
+func (c *Client) AttachInterface(domain, bridge, model, mac string) (string, error) {
+	if model == "" {
+		model = "virtio"
+	}
+
+	// Snapshot existing MACs on the bridge so we can identify the new one.
+	var before map[string]bool
+	if mac == "" {
+		before = c.macsOnBridge(domain, bridge)
+	}
+
 	args := []string{
 		"attach-interface", domain,
 		"--type", "bridge",
 		"--source", bridge,
-		"--model", "virtio",
+		"--model", model,
 		"--config",
-		"--live",
 	}
-
+	if c.IsRunning(domain) {
+		args = append(args, "--live")
+	}
 	if mac != "" {
 		args = append(args, "--mac", mac)
 	}
@@ -137,18 +170,15 @@ func (c *Client) AttachInterface(domain, bridge, mac string) (string, error) {
 		return "", fmt.Errorf("virsh attach-interface failed: %s - %w", string(out), err)
 	}
 
-	// If no MAC was provided, we need to find it from the domain
+	// If no MAC was provided, identify the newly added interface by diffing.
 	if mac == "" {
-		interfaces, err := c.GetDomainInterfaces(domain)
-		if err != nil {
-			return "", err
-		}
-		// Return the MAC of the interface on this bridge (last added)
-		for i := len(interfaces) - 1; i >= 0; i-- {
-			if interfaces[i].Bridge == bridge {
-				return interfaces[i].MAC, nil
+		after := c.macsOnBridge(domain, bridge)
+		for m := range after {
+			if !before[m] {
+				return m, nil
 			}
 		}
+		return "", nil // could not determine the assigned MAC
 	}
 
 	return mac, nil
@@ -179,7 +209,9 @@ func (c *Client) DetachInterface(domain, mac string) error {
 		"--type", "bridge",
 		"--mac", mac,
 		"--config",
-		"--live",
+	}
+	if c.IsRunning(domain) {
+		args = append(args, "--live")
 	}
 
 	out, err := exec.Command("virsh", args...).CombinedOutput()

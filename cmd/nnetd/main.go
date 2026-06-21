@@ -68,6 +68,16 @@ func main() {
 		"peers_count", len(peers),
 	)
 
+	// Warn about overlays that export prefixes but have no overlay (bridge) IP:
+	// the announced next-hop falls back to the underlay IP, which is usually not
+	// reachable over the overlay and silently black-holes traffic.
+	for _, o := range overlays {
+		if len(o.Routing.Export.Networks) > 0 && o.Bridge.IPv4 == "" && o.Bridge.IPv6 == "" {
+			slog.Warn("overlay exports routes but has no bridge IP; announced next-hop may be unreachable over the overlay",
+				"overlay", o.Name, "vni", o.VNI)
+		}
+	}
+
 	// Setup context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

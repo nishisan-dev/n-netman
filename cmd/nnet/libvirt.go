@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -252,6 +253,7 @@ func libvirtListVMsCmd() *cobra.Command {
 func libvirtAttachCmd() *cobra.Command {
 	var bridge string
 	var mac string
+	var model string
 
 	cmd := &cobra.Command{
 		Use:   "attach <vm-name>",
@@ -261,6 +263,12 @@ The interface is persisted in the domain XML and applied live if the VM is runni
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vmName := args[0]
+
+			if mac != "" {
+				if _, err := net.ParseMAC(mac); err != nil {
+					return fmt.Errorf("invalid --mac %q: %w", mac, err)
+				}
+			}
 
 			cfg, err := loadConfig()
 			if err != nil {
@@ -288,7 +296,7 @@ The interface is persisted in the domain XML and applied live if the VM is runni
 			}
 
 			// Attach interface
-			assignedMAC, err := client.AttachInterface(vmName, bridge, mac)
+			assignedMAC, err := client.AttachInterface(vmName, bridge, model, mac)
 			if err != nil {
 				return fmt.Errorf("failed to attach interface: %w", err)
 			}
@@ -302,6 +310,7 @@ The interface is persisted in the domain XML and applied live if the VM is runni
 
 	cmd.Flags().StringVar(&bridge, "bridge", "", "Bridge to attach the VM to (required)")
 	cmd.Flags().StringVar(&mac, "mac", "", "MAC address for the interface (optional, auto-generated if not specified)")
+	cmd.Flags().StringVar(&model, "model", "virtio", "NIC model for the interface")
 	_ = cmd.MarkFlagRequired("bridge")
 
 	return cmd
@@ -318,6 +327,10 @@ The interface is removed from both the domain XML and the running VM.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vmName := args[0]
+
+			if _, err := net.ParseMAC(mac); err != nil {
+				return fmt.Errorf("invalid --mac %q: %w", mac, err)
+			}
 
 			client := libvirt.NewClient()
 

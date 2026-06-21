@@ -24,23 +24,25 @@ type BridgeConfig struct {
 
 // Create creates a new Linux bridge.
 func (m *BridgeManager) Create(cfg BridgeConfig) error {
-	// Check if bridge already exists
-	existing, err := netlink.LinkByName(cfg.Name)
-	if err == nil {
-		// Bridge exists, check if it's actually a bridge
-		if _, ok := existing.(*netlink.Bridge); ok {
-			// Already exists as a bridge, just ensure it's up
-			return netlink.LinkSetUp(existing)
-		}
-		// Wrong type, delete and recreate (destructive but keeps name consistent).
-		if err := netlink.LinkDel(existing); err != nil {
-			return fmt.Errorf("failed to delete existing interface %s: %w", cfg.Name, err)
-		}
-	}
-
 	// Set defaults
 	if cfg.MTU == 0 {
 		cfg.MTU = 1500
+	}
+
+	// Reconcile an existing interface of the same name.
+	existing, err := netlink.LinkByName(cfg.Name)
+	if err == nil {
+		if _, ok := existing.(*netlink.Bridge); !ok {
+			// Refuse to destroy a non-bridge interface that shares the name.
+			return fmt.Errorf("interface %s exists but is not a bridge (%T); refusing to replace it", cfg.Name, existing)
+		}
+		// Reconcile MTU drift and ensure the bridge is up.
+		if cfg.MTU > 0 && existing.Attrs().MTU != cfg.MTU {
+			if err := netlink.LinkSetMTU(existing, cfg.MTU); err != nil {
+				return fmt.Errorf("failed to set MTU on bridge %s: %w", cfg.Name, err)
+			}
+		}
+		return netlink.LinkSetUp(existing)
 	}
 
 	// Create bridge

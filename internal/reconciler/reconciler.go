@@ -349,8 +349,9 @@ func (r *Reconciler) reconcileFDBForOverlay(ctx context.Context, overlay config.
 	}
 
 	// Head-end replication mode: populate FDB with 00:00:00:00:00:00 entries
-	// This is required for BUM traffic even when learning=true
-	peers := r.cfg.GetPeers()
+	// This is required for BUM traffic even when learning=true. Only peers that
+	// participate in this overlay's VNI are flooded (avoids cross-overlay leak).
+	peers := r.cfg.GetPeersForVNI(overlay.VNI)
 
 	// Build list of peer IPs
 	var peerIPs []net.IP
