@@ -567,6 +567,28 @@ overlays:
 	}
 }
 
+func TestLoader_Load_TLSRequiresCA(t *testing.T) {
+	yaml := `
+version: 1
+node:
+  id: "n"
+overlay:
+  vxlan:
+    vni: 100
+    name: "vxlan100"
+    bridge: "br-test"
+security:
+  control_plane:
+    tls:
+      enabled: true
+      cert_file: "/tmp/does-not-exist.crt"
+      key_file: "/tmp/does-not-exist.key"
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected error: TLS enabled without ca_file")
+	}
+}
+
 func TestLoader_ShippedExamplesAreValid(t *testing.T) {
 	// The example/config files shipped in the repo must always load and validate.
 	for _, p := range []string{"../../n-netman.yml", "../../examples/multi-overlay.yaml"} {

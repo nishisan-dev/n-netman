@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/nishisan-dev/n-netman/api/v1"
@@ -297,17 +298,59 @@ func (s *Server) Stop() {
 	s.logger.Info("control plane server stopped")
 }
 
-// ExchangeState implements the ExchangeState RPC.
-// Called when a peer connects to perform initial state synchronization.
-func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.StateResponse, error) {
-	s.logger.Info("received state exchange request",
-		"peer_id", req.NodeId,
-		"route_count", len(req.Routes),
-	)
+// authenticatedPeerID returns the CommonName of the verified client certificate
+// when the connection is mTLS-protected. The bool is false when the request is
+// not authenticated via a verified client certificate (e.g. TLS disabled).
+func authenticatedPeerID(ctx context.Context) (string, bool) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", false
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return "", false
+	}
+	chains := tlsInfo.State.VerifiedChains
+	if len(chains) == 0 || len(chains[0]) == 0 {
+		return "", false
+	}
+	return chains[0][0].Subject.CommonName, true
+}
 
-	// Process incoming routes from the peer before returning our current view.
-	incomingRoutes := make([]Route, 0, len(req.Routes))
-	for _, r := range req.Routes {
+// resolvePeerID binds the claimed node id to the authenticated identity. Under
+// mTLS, the verified certificate CommonName is authoritative: a request whose
+// node_id does not match it is rejected (prevents a peer from spoofing another's
+// identity to inject or withdraw routes). When the connection is not mTLS, the
+// claimed id is used as-is (control plane runs without authentication).
+func (s *Server) resolvePeerID(ctx context.Context, claimed string) (string, error) {
+	cn, ok := authenticatedPeerID(ctx)
+	if !ok {
+		if claimed == "" {
+			return "", status.Error(codes.InvalidArgument, "node_id is required")
+		}
+		return claimed, nil
+	}
+	if claimed != "" && claimed != cn {
+		return "", status.Errorf(codes.PermissionDenied,
+			"node_id %q does not match authenticated identity %q", claimed, cn)
+	}
+	return cn, nil
+}
+
+// ingestRoutes validates and stores routes announced by a peer, rejecting
+// entries with an invalid prefix or next-hop so a misbehaving peer cannot
+// poison the route table. Returns the accepted routes.
+func (s *Server) ingestRoutes(pbRoutes []*pb.Route, peerID string) []Route {
+	out := make([]Route, 0, len(pbRoutes))
+	for _, r := range pbRoutes {
+		if _, _, err := net.ParseCIDR(r.Prefix); err != nil {
+			s.logger.Warn("rejecting route with invalid prefix", "prefix", r.Prefix, "peer", peerID)
+			continue
+		}
+		if r.NextHop != "" && net.ParseIP(r.NextHop) == nil {
+			s.logger.Warn("rejecting route with invalid next-hop", "next_hop", r.NextHop, "peer", peerID)
+			continue
+		}
 		route := Route{
 			Prefix:       r.Prefix,
 			NextHop:      r.NextHop,
@@ -315,11 +358,29 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
 			VNI:          r.Vni,
-			PeerID:       req.NodeId,
+			PeerID:       peerID,
 		}
 		s.routeTable.Add(route)
-		incomingRoutes = append(incomingRoutes, route)
+		out = append(out, route)
 	}
+	return out
+}
+
+// ExchangeState implements the ExchangeState RPC.
+// Called when a peer connects to perform initial state synchronization.
+func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.StateResponse, error) {
+	peerID, err := s.resolvePeerID(ctx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("received state exchange request",
+		"peer_id", peerID,
+		"route_count", len(req.Routes),
+	)
+
+	// Process incoming routes from the peer before returning our current view.
+	incomingRoutes := s.ingestRoutes(req.Routes, peerID)
 
 	// Invoke callback if set
 	s.mu.RLock()
@@ -330,7 +391,7 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 	}
 
 	s.logger.Info("processed peer routes",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"imported_count", len(incomingRoutes),
 	)
 
@@ -359,26 +420,18 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 // AnnounceRoutes implements the AnnounceRoutes RPC.
 // Called when a peer announces new or updated routes.
 func (s *Server) AnnounceRoutes(ctx context.Context, req *pb.RouteAnnouncement) (*pb.RouteAck, error) {
+	peerID, err := s.resolvePeerID(ctx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
 	s.logger.Debug("received route announcement",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"route_count", len(req.Routes),
 	)
 
-	// Process incoming routes
-	incomingRoutes := make([]Route, 0, len(req.Routes))
-	for _, r := range req.Routes {
-		route := Route{
-			Prefix:       r.Prefix,
-			NextHop:      r.NextHop,
-			Metric:       r.Metric,
-			LeaseSeconds: r.LeaseSeconds,
-			Tags:         r.Tags,
-			VNI:          r.Vni,
-			PeerID:       req.NodeId,
-		}
-		s.routeTable.Add(route)
-		incomingRoutes = append(incomingRoutes, route)
-	}
+	// Validate and store incoming routes.
+	incomingRoutes := s.ingestRoutes(req.Routes, peerID)
 
 	// Invoke callback if set
 	s.mu.RLock()
@@ -389,21 +442,26 @@ func (s *Server) AnnounceRoutes(ctx context.Context, req *pb.RouteAnnouncement) 
 	}
 
 	s.logger.Info("processed route announcement",
-		"peer_id", req.NodeId,
-		"count", len(req.Routes),
+		"peer_id", peerID,
+		"count", len(incomingRoutes),
 	)
 
 	return &pb.RouteAck{
 		Accepted:        true,
-		RoutesProcessed: uint32(len(req.Routes)),
+		RoutesProcessed: uint32(len(incomingRoutes)),
 	}, nil
 }
 
 // WithdrawRoutes implements the WithdrawRoutes RPC.
 // Called when a peer withdraws routes.
 func (s *Server) WithdrawRoutes(ctx context.Context, req *pb.RouteWithdrawal) (*pb.RouteAck, error) {
+	peerID, err := s.resolvePeerID(ctx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
 	s.logger.Info("received route withdrawal",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"prefix_count", len(req.Prefixes),
 	)
 
@@ -411,7 +469,7 @@ func (s *Server) WithdrawRoutes(ctx context.Context, req *pb.RouteWithdrawal) (*
 	// so the kernel routes can be deleted via the callback.
 	var withdrawn []Route
 	for _, prefix := range req.Prefixes {
-		withdrawn = append(withdrawn, s.routeTable.RemoveByPrefixPeer(prefix, req.NodeId)...)
+		withdrawn = append(withdrawn, s.routeTable.RemoveByPrefixPeer(prefix, peerID)...)
 	}
 
 	s.mu.RLock()
@@ -422,7 +480,7 @@ func (s *Server) WithdrawRoutes(ctx context.Context, req *pb.RouteWithdrawal) (*
 	}
 
 	s.logger.Info("processed route withdrawal",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"removed_count", len(withdrawn),
 	)
 
@@ -556,7 +614,8 @@ func (c *Client) connectPeer(ctx context.Context, peer config.PeerConfig) error 
 	var transportCreds credentials.TransportCredentials
 	if c.cfg.Security.ControlPlane.TLS.Enabled {
 		var err error
-		transportCreds, err = LoadClientTLSConfig(&c.cfg.Security.ControlPlane.TLS)
+		// The peer endpoint address must be present in the peer certificate SANs.
+		transportCreds, err = LoadClientTLSConfig(&c.cfg.Security.ControlPlane.TLS, peer.Endpoint.Address)
 		if err != nil {
 			return fmt.Errorf("failed to load TLS config: %w", err)
 		}

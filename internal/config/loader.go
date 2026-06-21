@@ -176,27 +176,28 @@ func (l *Loader) validateSemantics(cfg *Config) error {
 		}
 	}
 
-	// Validate TLS configuration
+	// Validate TLS configuration. When enabled, cert_file, key_file and ca_file
+	// are all mandatory: the CA is required to authenticate peers (mTLS) and to
+	// verify the server, so we never fall back to skipping verification.
 	if cfg.Security.ControlPlane.TLS.Enabled {
-		if cfg.Security.ControlPlane.TLS.CertFile == "" {
+		tlsCfg := cfg.Security.ControlPlane.TLS
+		if tlsCfg.CertFile == "" {
 			return fmt.Errorf("TLS enabled but cert_file not specified")
 		}
-		if cfg.Security.ControlPlane.TLS.KeyFile == "" {
+		if tlsCfg.KeyFile == "" {
 			return fmt.Errorf("TLS enabled but key_file not specified")
 		}
-		// Check that certificate files exist
+		if tlsCfg.CAFile == "" {
+			return fmt.Errorf("TLS enabled but ca_file not specified (required for mTLS and server verification)")
+		}
+		// Check that all referenced files exist.
 		for name, path := range map[string]string{
-			"cert_file": cfg.Security.ControlPlane.TLS.CertFile,
-			"key_file":  cfg.Security.ControlPlane.TLS.KeyFile,
+			"cert_file": tlsCfg.CertFile,
+			"key_file":  tlsCfg.KeyFile,
+			"ca_file":   tlsCfg.CAFile,
 		} {
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				return fmt.Errorf("TLS %s not found: %s", name, path)
-			}
-		}
-		// CA file is optional (enables mTLS when present)
-		if cfg.Security.ControlPlane.TLS.CAFile != "" {
-			if _, err := os.Stat(cfg.Security.ControlPlane.TLS.CAFile); os.IsNotExist(err) {
-				return fmt.Errorf("TLS ca_file not found: %s", cfg.Security.ControlPlane.TLS.CAFile)
 			}
 		}
 	}

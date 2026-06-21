@@ -1,9 +1,40 @@
 package controlplane
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 	"time"
+
+	pb "github.com/nishisan-dev/n-netman/api/v1"
+	"github.com/nishisan-dev/n-netman/internal/config"
 )
+
+func TestResolvePeerID_NoMTLS(t *testing.T) {
+	s := NewServer(&config.Config{}, NewRouteTable(), slog.Default())
+
+	if _, err := s.resolvePeerID(context.Background(), ""); err == nil {
+		t.Fatal("expected error for empty node_id without mTLS")
+	}
+	id, err := s.resolvePeerID(context.Background(), "host-a")
+	if err != nil || id != "host-a" {
+		t.Fatalf("expected (host-a, nil), got (%q, %v)", id, err)
+	}
+}
+
+func TestIngestRoutes_RejectsInvalid(t *testing.T) {
+	s := NewServer(&config.Config{}, NewRouteTable(), slog.Default())
+	in := []*pb.Route{
+		{Prefix: "10.0.0.0/24", NextHop: "10.0.0.1", Vni: 100},
+		{Prefix: "bad-prefix", NextHop: "10.0.0.1"},
+		{Prefix: "10.1.0.0/24", NextHop: "not-an-ip"},
+		{Prefix: "10.2.0.0/24"}, // empty next-hop is allowed
+	}
+	out := s.ingestRoutes(in, "host-a")
+	if len(out) != 2 {
+		t.Fatalf("expected 2 accepted routes (valid prefix+nexthop and empty nexthop), got %d", len(out))
+	}
+}
 
 func TestRouteTable_CompositeKeyAvoidsCollisions(t *testing.T) {
 	rt := NewRouteTable()
