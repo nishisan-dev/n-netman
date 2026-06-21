@@ -35,9 +35,18 @@ type Route struct {
 }
 
 // RouteTable stores learned routes from peers.
+//
+// Routes are keyed by (VNI, prefix, peerID) so that the same prefix announced
+// in different overlays or by different peers does not collapse into a single
+// last-writer-wins entry.
 type RouteTable struct {
 	mu     sync.RWMutex
-	routes map[string]Route // key: prefix; last writer wins on collisions
+	routes map[string]Route
+}
+
+// routeKey is the composite identity of a route within the table.
+func routeKey(r Route) string {
+	return fmt.Sprintf("%d|%s|%s", r.VNI, r.Prefix, r.PeerID)
 }
 
 // NewRouteTable creates a new route table.
@@ -57,29 +66,46 @@ func (rt *RouteTable) Add(r Route) {
 	if r.LeaseSeconds > 0 {
 		r.ExpiresAt = r.ReceivedAt.Add(time.Duration(r.LeaseSeconds) * time.Second)
 	}
-	rt.routes[r.Prefix] = r
+	rt.routes[routeKey(r)] = r
 }
 
-// Remove removes a route by prefix.
-func (rt *RouteTable) Remove(prefix string) {
+// Remove removes the exact route (matched by VNI+prefix+peer).
+func (rt *RouteTable) Remove(r Route) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	delete(rt.routes, prefix)
+	delete(rt.routes, routeKey(r))
 }
 
-// RemoveByPeer removes all routes from a specific peer.
-func (rt *RouteTable) RemoveByPeer(peerID string) int {
+// RemoveByPrefixPeer removes every route for a given prefix announced by a
+// specific peer (across all VNIs) and returns the removed routes so the caller
+// can withdraw them from the kernel.
+func (rt *RouteTable) RemoveByPrefixPeer(prefix, peerID string) []Route {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	count := 0
-	for prefix, r := range rt.routes {
-		if r.PeerID == peerID {
-			delete(rt.routes, prefix)
-			count++
+	var removed []Route
+	for k, r := range rt.routes {
+		if r.Prefix == prefix && r.PeerID == peerID {
+			removed = append(removed, r)
+			delete(rt.routes, k)
 		}
 	}
-	return count
+	return removed
+}
+
+// RemoveByPeer removes all routes from a specific peer and returns them.
+func (rt *RouteTable) RemoveByPeer(peerID string) []Route {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	var removed []Route
+	for k, r := range rt.routes {
+		if r.PeerID == peerID {
+			removed = append(removed, r)
+			delete(rt.routes, k)
+		}
+	}
+	return removed
 }
 
 // GetByPeer returns all routes from a specific peer.
@@ -94,14 +120,6 @@ func (rt *RouteTable) GetByPeer(peerID string) []Route {
 		}
 	}
 	return routes
-}
-
-// Get returns a route by prefix.
-func (rt *RouteTable) Get(prefix string) (Route, bool) {
-	rt.mu.RLock()
-	defer rt.mu.RUnlock()
-	r, ok := rt.routes[prefix]
-	return r, ok
 }
 
 // All returns all routes.
@@ -124,10 +142,10 @@ func (rt *RouteTable) ExpireStale() []Route {
 
 	now := time.Now()
 	var expired []Route
-	for prefix, r := range rt.routes {
+	for key, r := range rt.routes {
 		if !r.ExpiresAt.IsZero() && r.ExpiresAt.Before(now) {
 			expired = append(expired, r)
-			delete(rt.routes, prefix)
+			delete(rt.routes, key)
 		}
 	}
 	return expired
@@ -146,6 +164,8 @@ type Server struct {
 
 	// Callback invoked when routes are received (for integrating with RouteManager)
 	onRoutesReceived func(routes []Route)
+	// Callback invoked when routes are withdrawn (to remove them from the kernel)
+	onRoutesWithdrawn func(routes []Route)
 
 	mu        sync.RWMutex
 	started   bool
@@ -166,6 +186,14 @@ func (s *Server) SetRoutesReceivedCallback(fn func(routes []Route)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onRoutesReceived = fn
+}
+
+// SetRoutesWithdrawnCallback sets the callback invoked when a peer withdraws
+// routes, so they can be removed from the kernel.
+func (s *Server) SetRoutesWithdrawnCallback(fn func(routes []Route)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRoutesWithdrawn = fn
 }
 
 // Start starts the gRPC server.
@@ -379,23 +407,28 @@ func (s *Server) WithdrawRoutes(ctx context.Context, req *pb.RouteWithdrawal) (*
 		"prefix_count", len(req.Prefixes),
 	)
 
-	count := 0
+	// Remove the withdrawn prefixes for this peer (across VNIs) and collect them
+	// so the kernel routes can be deleted via the callback.
+	var withdrawn []Route
 	for _, prefix := range req.Prefixes {
-		// Only remove if the route was from this peer
-		if r, ok := s.routeTable.Get(prefix); ok && r.PeerID == req.NodeId {
-			s.routeTable.Remove(prefix)
-			count++
-		}
+		withdrawn = append(withdrawn, s.routeTable.RemoveByPrefixPeer(prefix, req.NodeId)...)
+	}
+
+	s.mu.RLock()
+	callback := s.onRoutesWithdrawn
+	s.mu.RUnlock()
+	if callback != nil && len(withdrawn) > 0 {
+		callback(withdrawn)
 	}
 
 	s.logger.Info("processed route withdrawal",
 		"peer_id", req.NodeId,
-		"removed_count", count,
+		"removed_count", len(withdrawn),
 	)
 
 	return &pb.RouteAck{
 		Accepted:        true,
-		RoutesProcessed: uint32(count),
+		RoutesProcessed: uint32(len(withdrawn)),
 	}, nil
 }
 
@@ -450,8 +483,19 @@ type Client struct {
 	routeTable *RouteTable
 	logger     *slog.Logger
 
+	// Callback invoked when routes are learned from a peer (to install them).
+	onRoutesReceived func(routes []Route)
+
 	mu    sync.RWMutex
 	conns map[string]*peerConn // key: peer ID
+}
+
+// SetRoutesReceivedCallback sets the callback for routes learned on the client
+// path (e.g. ExchangeState responses), so they are installed in the kernel.
+func (c *Client) SetRoutesReceivedCallback(fn func(routes []Route)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onRoutesReceived = fn
 }
 
 // peerConn represents a connection to a peer.
@@ -477,8 +521,8 @@ func NewClient(cfg *config.Config, routeTable *RouteTable, logger *slog.Logger) 
 // ConnectToPeers establishes connections to all configured peers.
 func (c *Client) ConnectToPeers(ctx context.Context) error {
 	var firstErr error
-	// Note: peers come from legacy overlay config (v1); v2 overlays store peers elsewhere.
-	for _, peer := range c.cfg.Overlay.Peers {
+	// Peers are resolved version-aware (root 'peers:' for v2, 'overlay.peers' for v1).
+	for _, peer := range c.cfg.GetPeers() {
 		if err := c.connectPeer(ctx, peer); err != nil {
 			c.logger.Warn("failed to connect to peer",
 				"peer_id", peer.ID,
@@ -614,7 +658,8 @@ func (c *Client) exchangeWithPeer(ctx context.Context, pc *peerConn, req *pb.Sta
 		return fmt.Errorf("ExchangeState RPC failed: %w", err)
 	}
 
-	// Store received routes
+	// Store received routes and install them in the kernel via the callback.
+	received := make([]Route, 0, len(resp.Routes))
 	for _, r := range resp.Routes {
 		route := Route{
 			Prefix:       r.Prefix,
@@ -626,6 +671,14 @@ func (c *Client) exchangeWithPeer(ctx context.Context, pc *peerConn, req *pb.Sta
 			PeerID:       resp.NodeId,
 		}
 		c.routeTable.Add(route)
+		received = append(received, route)
+	}
+
+	c.mu.RLock()
+	callback := c.onRoutesReceived
+	c.mu.RUnlock()
+	if callback != nil && len(received) > 0 {
+		callback(received)
 	}
 
 	c.logger.Info("exchanged state with peer",
@@ -863,7 +916,7 @@ func (c *Client) GetPeerStatuses() map[string]observability.PeerStatus {
 	result := make(map[string]observability.PeerStatus)
 
 	// Start with configured peers
-	for _, peer := range c.cfg.Overlay.Peers {
+	for _, peer := range c.cfg.GetPeers() {
 		ps := observability.PeerStatus{
 			ID:       peer.ID,
 			Endpoint: peer.Endpoint.Address,
@@ -904,8 +957,10 @@ func (c *Client) GetPeerStatuses() map[string]observability.PeerStatus {
 func (c *Client) GetRouteStats() observability.RouteStats {
 	stats := observability.RouteStats{}
 
-	// Exported routes from config
-	stats.Exported = len(c.cfg.Routing.Export.Networks)
+	// Exported routes from config, summed across all overlays (v1 and v2).
+	for _, o := range c.cfg.GetOverlays() {
+		stats.Exported += len(o.Routing.Export.Networks)
+	}
 
 	// Installed routes (routes received from peers)
 	for _, route := range c.routeTable.All() {
