@@ -260,3 +260,29 @@ Commits atômicos por tema (CLAUDE.md §2/§4), com testes acompanhando cada mud
   troca de rotas, withdraw removendo do kernel, flush multi-tabela no shutdown e reconexão.
 - **Métricas/health:** `curl :9109/metrics` mostra contadores variando; derrubar peer e ver
   `/healthz`/`/status` refletirem.
+
+---
+
+## Status de Execução (concluído)
+
+Roadmap P0→P3 executado em 10 commits atômicos na branch `fix/code-review-remediation`.
+Verificação final: `go build ./...`, `go vet ./...` e `go test -race ./...` **verdes**;
+`gofmt` limpo. Cobertura de testes saiu de 1 arquivo para 6 pacotes testados
+(config, routing, controlplane, observability, netlink, cmd/nnetd).
+
+| Commit | Stream | Itens |
+|---|---|---|
+| `fix(config)` | Config/peers v2 | peers raiz v2 + `vnis`, `version` obrigatória, duplicatas VNI/nome/bridge/tabela, CIDR de bridge, grupo multicast BUM |
+| `fix(routing)` | Import policy | política aplicada no daemon; deny por sobreposição, allow por contenção, default nega |
+| `fix(routes)` | Ciclo de vida | RouteTable chave composta; withdraw→kernel; install no caminho client; flush multi-tabela; Delete escopado por protocolo; fontes de peer version-aware |
+| `fix(tls)` | TLS/mTLS | CA obrigatória, `ServerName`, identidade pelo CN; validação de payload |
+| `fix(daemon)` | Robustez | deadlines por RPC; reconexão (`grpc.NewClient`); erro por-overlay não aborta; ordering de shutdown; limites gRPC; `Stop` sem deadlock; race de `startTime` |
+| `fix(observability)` | Observabilidade | métricas populadas; `/healthz` real; timeouts HTTP; registro idempotente |
+| `fix(netlink,libvirt)` | Idempotência | reconcile de drift VXLAN/bridge sem destruir; FDB só BUM; FDB por overlay; libvirt `--live` condicional/model/MAC |
+| `fix(p3+docs)` | Polish + docs | logging aplicado; `%s` de struct; serial CA aleatório; perms 0700; sync de docs |
+| `chore(ci)` | CI/testes | workflow CI (`go test -race`); testes de resolução de tabela |
+| `fix(lab)` | Lab | Vagrant v2 peers no raiz + teste de regressão |
+
+**Refutados** (não corrigidos, por design): colisão de prioridade de `ip rule` (seletores
+por bridge são disjuntos); `routing.enabled`/`topology.transit` permanecem inertes (não
+implementados — documentados como reservados).
