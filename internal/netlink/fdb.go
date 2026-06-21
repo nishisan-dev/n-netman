@@ -163,8 +163,24 @@ func (m *FDBManager) DeletePeer(vxlanName string, remoteIP net.IP) error {
 	})
 }
 
-// SyncPeers synchronizes the FDB with a list of peer IPs.
-// Adds missing peers and removes peers that are no longer in the list.
+// isZeroMAC reports whether a hardware address is the all-zeros BUM MAC
+// (00:00:00:00:00:00). Some kernels report it as an empty slice.
+func isZeroMAC(mac net.HardwareAddr) bool {
+	if len(mac) == 0 {
+		return true
+	}
+	for _, b := range mac {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// SyncPeers synchronizes the BUM (head-end replication) FDB entries with a list
+// of peer IPs. It only considers and removes the all-zeros BUM entries: learned
+// unicast entries (real MACs) are left untouched so they are neither mistaken
+// for managed peers nor wrongly deleted.
 func (m *FDBManager) SyncPeers(vxlanName string, desiredPeers []net.IP) error {
 	// Get current FDB entries
 	current, err := m.List(vxlanName)
@@ -172,10 +188,12 @@ func (m *FDBManager) SyncPeers(vxlanName string, desiredPeers []net.IP) error {
 		return err
 	}
 
-	// Build set of current peer IPs
+	// Build set of current BUM peer IPs (all-zeros MAC entries only).
 	currentPeers := make(map[string]bool)
 	for _, entry := range current {
-		currentPeers[entry.RemoteIP.String()] = true
+		if isZeroMAC(entry.MAC) {
+			currentPeers[entry.RemoteIP.String()] = true
+		}
 	}
 
 	// Build set of desired peer IPs
@@ -193,8 +211,11 @@ func (m *FDBManager) SyncPeers(vxlanName string, desiredPeers []net.IP) error {
 		}
 	}
 
-	// Remove stale peers
+	// Remove stale BUM entries (only all-zeros entries we manage).
 	for _, entry := range current {
+		if !isZeroMAC(entry.MAC) {
+			continue
+		}
 		if !desiredSet[entry.RemoteIP.String()] {
 			if err := m.DeletePeer(vxlanName, entry.RemoteIP); err != nil {
 				// Log but continue

@@ -86,6 +86,8 @@ observability:
 
 **Endpoint:** `http://<address>:<port>/metrics`
 
+Todas as métricas abaixo são populadas em tempo de execução pelo daemon (reconciler e control-plane). Além de `nnetman_peers_configured`, são atualizadas a cada ciclo: `reconciliations_total`, `reconciliation_errors_total`, `reconciliation_duration_seconds`, `last_reconcile_timestamp_seconds`, `vxlans_active`, `bridges_active`, `fdb_entries_total`, `peers_connected`, `peers_healthy`, `routes_exported` e `routes_imported`.
+
 ### Métricas Disponíveis
 
 #### Reconciliação
@@ -192,13 +194,12 @@ curl http://127.0.0.1:9110/livez
 ```
 
 **Resposta:**
-```
-OK
+```json
+{"status": "alive", "uptime_seconds": 3600}
 ```
 
 **Status codes:**
-- `200`: Processo rodando
-- `503`: Processo em shutdown
+- `200`: Processo vivo (sempre responde 200 enquanto o servidor HTTP estiver no ar)
 
 **Uso:** Liveness probe para Kubernetes ou systemd.
 
@@ -211,13 +212,18 @@ curl http://127.0.0.1:9110/readyz
 ```
 
 **Resposta:**
+```json
+{"status": "ready"}
 ```
-OK
+
+Quando não está pronto (inicializando ou em shutdown), retorna `503` com:
+```json
+{"status": "not ready"}
 ```
 
 **Status codes:**
 - `200`: Pronto (config carregada, gRPC listening)
-- `503`: Não pronto (inicializando)
+- `503`: Não pronto (inicializando ou durante shutdown)
 
 **Uso:** Readiness probe para Kubernetes.
 
@@ -231,19 +237,19 @@ curl http://127.0.0.1:9110/healthz
 
 **Resposta:**
 ```json
-{
-  "status": "healthy",
-  "checks": {
-    "config": "ok",
-    "grpc": "ok",
-    "reconciler": "ok"
-  }
-}
+{"status": "healthy"}
+```
+
+Quando não saudável, retorna `503` com:
+```json
+{"status": "unhealthy"}
 ```
 
 **Status codes:**
-- `200`: Todos os checks passaram
-- `503`: Algum check falhou
+- `200`: Saudável
+- `503`: Não saudável
+
+`/healthz` reflete o estado real do reconciler: fica `unhealthy` (`503`) se o último ciclo de reconciliação falhou. Durante o shutdown, o daemon passa a reportar `not ready` (em `/readyz`) e `unhealthy` (em `/healthz`).
 
 #### /status
 

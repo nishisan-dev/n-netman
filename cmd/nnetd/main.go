@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	nlmgr "github.com/nishisan-dev/n-netman/internal/netlink"
 	"github.com/nishisan-dev/n-netman/internal/observability"
 	"github.com/nishisan-dev/n-netman/internal/reconciler"
+	"github.com/nishisan-dev/n-netman/internal/routing"
 )
 
 var (
@@ -26,6 +28,27 @@ var (
 	commit    = "unknown"
 	buildDate = "unknown"
 )
+
+// newLogger builds a slog logger honoring the configured level and format.
+func newLogger(level, format string) *slog.Logger {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: lvl}
+	if strings.ToLower(format) == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+}
 
 func main() {
 	// Parse flags
@@ -38,11 +61,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Setup structured logging
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// Bootstrap logging (used for config-load errors before config is available).
+	slog.SetDefault(newLogger("info", "json"))
 
 	slog.Info("starting n-netman daemon",
 		"version", version,
@@ -57,6 +77,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Reconfigure logging from the loaded config (level + format).
+	logger := newLogger(cfg.Observability.Logging.Level, cfg.Observability.Logging.Format)
+	slog.SetDefault(logger)
+
 	overlays := cfg.GetOverlays()
 	peers := cfg.GetPeers()
 	slog.Info("configuration loaded successfully",
@@ -66,6 +90,16 @@ func main() {
 		"overlays_count", len(overlays),
 		"peers_count", len(peers),
 	)
+
+	// Warn about overlays that export prefixes but have no overlay (bridge) IP:
+	// the announced next-hop falls back to the underlay IP, which is usually not
+	// reachable over the overlay and silently black-holes traffic.
+	for _, o := range overlays {
+		if len(o.Routing.Export.Networks) > 0 && o.Bridge.IPv4 == "" && o.Bridge.IPv6 == "" {
+			slog.Warn("overlay exports routes but has no bridge IP; announced next-hop may be unreachable over the overlay",
+				"overlay", o.Name, "vni", o.VNI)
+		}
+	}
 
 	// Setup context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,17 +130,25 @@ func main() {
 	// Initialize route manager for installing routes learned from peers.
 	routeMgr := nlmgr.NewRouteManager()
 
+	// Routing policy engine (import allow/deny enforcement).
+	routingMgr := routing.NewManager(cfg)
+
 	// Initialize route table for control plane
 	routeTable := controlplane.NewRouteTable()
 
 	// Create route installer callback (control plane -> kernel).
 	routeInstaller := func(routes []controlplane.Route) {
-		installReceivedRoutes(cfg, routeMgr, routes, logger)
+		installReceivedRoutes(cfg, routeMgr, routingMgr, routes, logger)
+	}
+	// Create route remover callback (peer withdrawals -> kernel cleanup).
+	routeRemover := func(routes []controlplane.Route) {
+		deleteRoutesFromKernel(cfg, routeMgr, routes, logger, "withdrawn by peer")
 	}
 
 	// Start gRPC control plane server
 	cpServer := controlplane.NewServer(cfg, routeTable, logger)
 	cpServer.SetRoutesReceivedCallback(routeInstaller)
+	cpServer.SetRoutesWithdrawnCallback(routeRemover)
 	if err := cpServer.Start(); err != nil {
 		slog.Error("failed to start control plane server", "error", err)
 		os.Exit(1)
@@ -115,12 +157,14 @@ func main() {
 
 	// Start control plane client (connect to peers and keep routes fresh).
 	cpClient := controlplane.NewClient(cfg, routeTable, logger)
+	// Routes learned on the client path (ExchangeState responses) are installed too.
+	cpClient.SetRoutesReceivedCallback(routeInstaller)
 	// Set client as status provider for /status endpoint
 	obsServer.SetStatusProvider(cpClient)
 	go func() {
 		// Wait a bit for local setup before connecting to peers
 		time.Sleep(2 * time.Second)
-		if err := cpClient.ConnectToPeers(ctx); err != nil {
+		if err := cpClient.ConnectToPeers(); err != nil {
 			slog.Warn("failed to connect to some peers", "error", err)
 		}
 
@@ -131,7 +175,7 @@ func main() {
 		}
 
 		// Start periodic health checks and route refresh loop.
-		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, routeMgr, logger)
+		go runRouteRefreshLoop(ctx, cpClient, cfg, routeTable, routeMgr, metrics, logger)
 	}()
 	defer cpClient.Disconnect()
 
@@ -139,7 +183,13 @@ func main() {
 	rec := reconciler.New(cfg,
 		reconciler.WithInterval(10*time.Second),
 		reconciler.WithLogger(logger),
+		reconciler.WithMetrics(metrics),
 	)
+
+	// /healthz reflects the reconciler's real state (last cycle had no error).
+	obsServer.SetHealthFunc(func() bool {
+		return rec.Status().LastErr == nil
+	})
 
 	go func() {
 		if err := rec.Run(ctx); err != nil && err != context.Canceled {
@@ -161,16 +211,23 @@ func main() {
 
 	slog.Info("shutting down n-netman daemon")
 
-	// Cleanup: flush all routes installed by n-netman.
-	table := cfg.Routing.Import.Install.Table
-	if table == 0 {
-		table = 100
-	}
-	slog.Info("flushing installed routes", "table", table, "protocol", nlmgr.RouteProtocolNNetMan)
-	if err := routeMgr.FlushByProtocol(table, nlmgr.RouteProtocolNNetMan); err != nil {
-		slog.Warn("failed to flush routes on shutdown", "error", err)
-	} else {
-		slog.Info("routes flushed successfully")
+	// Stop reporting ready/healthy and stop the control plane BEFORE flushing
+	// routes, so an in-flight peer announcement cannot reinstall a route the
+	// flush just removed. The deferred Stop/Disconnect calls become no-ops.
+	obsServer.SetReady(false)
+	obsServer.SetHealthy(false)
+	cpServer.Stop()
+	cpClient.Disconnect()
+
+	// Cleanup: flush all routes installed by n-netman across every table used by
+	// the overlays (multi-overlay configs install into per-overlay tables).
+	for _, table := range distinctImportTables(cfg) {
+		slog.Info("flushing installed routes", "table", table, "protocol", nlmgr.RouteProtocolNNetMan)
+		if err := routeMgr.FlushByProtocol(table, nlmgr.RouteProtocolNNetMan); err != nil {
+			slog.Warn("failed to flush routes on shutdown", "table", table, "error", err)
+		} else {
+			slog.Info("routes flushed successfully", "table", table)
+		}
 	}
 
 	// Cleanup: delete VXLAN interface (optional, can be configured)
@@ -180,16 +237,13 @@ func main() {
 }
 
 // installReceivedRoutes installs routes received from peers into the kernel.
-// Each route is installed in the table of its corresponding overlay (by VNI).
-func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, routes []controlplane.Route, logger *slog.Logger) {
-	// Build a VNI -> table mapping from overlays
-	vniToTable := make(map[uint32]int)
+// Each route is filtered by its overlay's import policy and installed in the
+// table of its corresponding overlay (by VNI).
+func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, routingMgr *routing.Manager, routes []controlplane.Route, logger *slog.Logger) {
+	// Build a VNI -> overlay mapping so we can apply the right import policy/table.
+	vniToOverlay := make(map[uint32]config.OverlayDef)
 	for _, overlay := range cfg.GetOverlays() {
-		table := overlay.Routing.Import.Install.Table
-		if table == 0 {
-			table = 100 // default
-		}
-		vniToTable[uint32(overlay.VNI)] = table
+		vniToOverlay[uint32(overlay.VNI)] = overlay
 	}
 
 	for _, r := range routes {
@@ -214,18 +268,34 @@ func installReceivedRoutes(cfg *config.Config, routeMgr *nlmgr.RouteManager, rou
 			continue
 		}
 
-		// Get the routing table based on the route's VNI
-		table, ok := vniToTable[r.VNI]
-		if !ok {
-			// Fallback: use legacy global table if VNI not found
+		// Apply the import policy and resolve the destination table for this VNI.
+		overlay, ok := vniToOverlay[r.VNI]
+		var (
+			allowed bool
+			table   int
+		)
+		if ok {
+			allowed = routingMgr.ShouldImportForOverlay(r, overlay)
+			table = overlay.Routing.Import.Install.Table
+		} else {
+			// Unknown VNI: fall back to the global import policy/table.
+			allowed = routingMgr.ShouldImport(r)
 			table = cfg.Routing.Import.Install.Table
-			if table == 0 {
-				table = 100
-			}
-			logger.Debug("route VNI not found in overlays, using default table",
+			logger.Debug("route VNI not found in overlays, using global import policy/table",
 				"vni", r.VNI,
-				"table", table,
 			)
+		}
+		if table == 0 {
+			table = 100 // default
+		}
+
+		if !allowed {
+			logger.Info("route rejected by import policy",
+				"prefix", r.Prefix,
+				"peer", r.PeerID,
+				"vni", r.VNI,
+			)
+			continue
 		}
 
 		// Install the route
@@ -304,12 +374,13 @@ func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.Route
 // detectLocalIP finds a local IP address to use for route announcements.
 // It uses a heuristic: pick the first interface with a subnet that contains the first peer.
 func detectLocalIP(cfg *config.Config) string {
-	if len(cfg.Overlay.Peers) == 0 {
+	peers := cfg.GetPeers()
+	if len(peers) == 0 {
 		return ""
 	}
 
 	// Get first peer's IP to determine our subnet
-	peerIP := net.ParseIP(cfg.Overlay.Peers[0].Endpoint.Address)
+	peerIP := net.ParseIP(peers[0].Endpoint.Address)
 	if peerIP == nil {
 		return ""
 	}
@@ -361,8 +432,104 @@ func extractIPFromCIDR(cidr string) string {
 	return ip.String()
 }
 
+// tableForVNI resolves the kernel routing table for a route's VNI, falling back
+// to the global/default table (or 100) when the VNI has no dedicated overlay.
+func tableForVNI(cfg *config.Config, vni uint32) int {
+	for _, o := range cfg.GetOverlays() {
+		if uint32(o.VNI) == vni {
+			if t := o.Routing.Import.Install.Table; t != 0 {
+				return t
+			}
+			return 100
+		}
+	}
+	if t := cfg.Routing.Import.Install.Table; t != 0 {
+		return t
+	}
+	return 100
+}
+
+// distinctImportTables returns every routing table n-netman may have installed
+// routes into (per-overlay tables plus the global/default table).
+func distinctImportTables(cfg *config.Config) []int {
+	seen := make(map[int]struct{})
+	var tables []int
+	add := func(t int) {
+		if t == 0 {
+			t = 100
+		}
+		if _, ok := seen[t]; !ok {
+			seen[t] = struct{}{}
+			tables = append(tables, t)
+		}
+	}
+	for _, o := range cfg.GetOverlays() {
+		add(o.Routing.Import.Install.Table)
+	}
+	add(cfg.Routing.Import.Install.Table)
+	return tables
+}
+
+// deleteRoutesFromKernel removes the given routes from their per-VNI tables,
+// scoped to the n-netman protocol AND to the exact next-hop the peer installed.
+// Scoping by next-hop matters because the in-memory table keeps one entry per
+// (VNI, prefix, peer) while the kernel keeps a single route per (dst, table):
+// without it, peer A withdrawing a prefix could delete peer B's active route
+// for the same prefix/table.
+func deleteRoutesFromKernel(cfg *config.Config, routeMgr *nlmgr.RouteManager, routes []controlplane.Route, logger *slog.Logger, reason string) {
+	for _, r := range routes {
+		_, ipnet, err := net.ParseCIDR(r.Prefix)
+		if err != nil {
+			continue
+		}
+		gw := net.ParseIP(r.NextHop)
+		if gw == nil {
+			// Without a valid next-hop we cannot scope the deletion safely; skip
+			// (such a route was never installed by installReceivedRoutes anyway).
+			logger.Debug("skipping route deletion without a valid next-hop",
+				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID)
+			continue
+		}
+		table := tableForVNI(cfg, r.VNI)
+		if err := routeMgr.Delete(nlmgr.RouteConfig{
+			Destination: ipnet,
+			Gateway:     gw,
+			Table:       table,
+			Protocol:    nlmgr.RouteProtocolNNetMan,
+		}); err != nil {
+			logger.Warn("failed to delete route",
+				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID, "next_hop", r.NextHop, "table", table, "error", err)
+		} else {
+			logger.Info("removed route",
+				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID, "next_hop", r.NextHop, "table", table)
+		}
+	}
+}
+
+// updatePeerRouteMetrics refreshes the peer/route gauges from live client state.
+func updatePeerRouteMetrics(client *controlplane.Client, m *observability.Metrics) {
+	if m == nil {
+		return
+	}
+	var connected, healthy int
+	for _, ps := range client.GetPeerStatuses() {
+		if ps.Status != "disconnected" {
+			connected++
+		}
+		if ps.Status == "healthy" {
+			healthy++
+		}
+	}
+	m.PeersConnected.Set(float64(connected))
+	m.PeersHealthy.Set(float64(healthy))
+
+	rs := client.GetRouteStats()
+	m.RoutesExported.Set(float64(rs.Exported))
+	m.RoutesImported.Set(float64(rs.Installed))
+}
+
 // runRouteRefreshLoop periodically refreshes routes with peers.
-func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, routeMgr *nlmgr.RouteManager, logger *slog.Logger) {
+func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *config.Config, routeTable *controlplane.RouteTable, routeMgr *nlmgr.RouteManager, metrics *observability.Metrics, logger *slog.Logger) {
 	// Refresh interval is half the lease time
 	leaseSecs := cfg.Routing.Import.Install.RouteLeaseSeconds
 	if leaseSecs <= 0 {
@@ -379,36 +546,18 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 	healthTicker := time.NewTicker(30 * time.Second)
 	defer healthTicker.Stop()
 
-	// Build a VNI -> table mapping from overlays for route cleanup
-	vniToTable := make(map[uint32]int)
-	for _, overlay := range cfg.GetOverlays() {
-		table := overlay.Routing.Import.Install.Table
-		if table == 0 {
-			table = 100 // default
-		}
-		vniToTable[uint32(overlay.VNI)] = table
-	}
-
-	// Default table for routes with unknown VNI
-	defaultTable := cfg.Routing.Import.Install.Table
-	if defaultTable == 0 {
-		defaultTable = 100
-	}
 	flushOnPeerDown := cfg.Routing.Import.Install.FlushOnPeerDown
-
-	// Helper to get table for a route based on its VNI
-	getTableForRoute := func(r controlplane.Route) int {
-		if table, ok := vniToTable[r.VNI]; ok {
-			return table
-		}
-		return defaultTable
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-healthTicker.C:
+			// Pick up any peers that were not connected yet (best-effort).
+			if err := client.ConnectToPeers(); err != nil {
+				logger.Debug("reconnect attempt had errors", "error", err)
+			}
+
 			// Check peer health and get newly unhealthy peers
 			downPeers, err := client.CheckPeerHealth(ctx)
 			if err != nil {
@@ -418,70 +567,24 @@ func runRouteRefreshLoop(ctx context.Context, client *controlplane.Client, cfg *
 			// Remove routes from peers that just went down
 			if len(downPeers) > 0 && flushOnPeerDown {
 				for _, peerID := range downPeers {
-					// Get routes for this peer from route table
-					peerRoutes := routeTable.GetByPeer(peerID)
-					for _, r := range peerRoutes {
-						_, ipnet, err := net.ParseCIDR(r.Prefix)
-						if err != nil {
-							continue
-						}
-						routeTable := getTableForRoute(r)
-						if err := routeMgr.Delete(nlmgr.RouteConfig{
-							Destination: ipnet,
-							Table:       routeTable,
-						}); err != nil {
-							logger.Warn("failed to delete route for down peer",
-								"prefix", r.Prefix,
-								"peer", peerID,
-								"table", routeTable,
-								"error", err,
-							)
-						} else {
-							logger.Info("removed route for down peer",
-								"prefix", r.Prefix,
-								"peer", peerID,
-								"table", routeTable,
-							)
-						}
-					}
-					// Remove from route table
 					removed := routeTable.RemoveByPeer(peerID)
+					deleteRoutesFromKernel(cfg, routeMgr, removed, logger, "down peer")
 					logger.Info("cleaned up routes for down peer",
 						"peer_id", peerID,
-						"routes_removed", removed,
+						"routes_removed", len(removed),
 					)
 				}
 			}
 
-			// Expire stale routes and remove from kernel
+			// Expire stale routes and remove them from the kernel.
 			expiredRoutes := routeTable.ExpireStale()
-			for _, r := range expiredRoutes {
-				_, ipnet, err := net.ParseCIDR(r.Prefix)
-				if err != nil {
-					continue
-				}
-				routeTable := getTableForRoute(r)
-				if err := routeMgr.Delete(nlmgr.RouteConfig{
-					Destination: ipnet,
-					Table:       routeTable,
-				}); err != nil {
-					logger.Warn("failed to delete expired route",
-						"prefix", r.Prefix,
-						"peer", r.PeerID,
-						"table", routeTable,
-						"error", err,
-					)
-				} else {
-					logger.Info("removed expired route",
-						"prefix", r.Prefix,
-						"peer", r.PeerID,
-						"table", routeTable,
-					)
-				}
-			}
+			deleteRoutesFromKernel(cfg, routeMgr, expiredRoutes, logger, "expired lease")
 			if len(expiredRoutes) > 0 {
 				logger.Info("expired stale routes", "count", len(expiredRoutes))
 			}
+
+			// Refresh peer/route gauges from live state.
+			updatePeerRouteMetrics(client, metrics)
 
 		case <-ticker.C:
 			// Re-announce our routes to peers

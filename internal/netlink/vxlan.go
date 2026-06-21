@@ -32,28 +32,43 @@ type VXLANConfig struct {
 
 // Create creates a new VXLAN interface.
 func (m *VXLANManager) Create(cfg VXLANConfig) error {
-	// Check if interface already exists
-	existing, err := netlink.LinkByName(cfg.Name)
-	if err == nil {
-		// Interface exists, check if it's a VXLAN with matching config
-		if vxlan, ok := existing.(*netlink.Vxlan); ok {
-			if vxlan.VxlanId == cfg.VNI {
-				// Already exists with same VNI, just ensure it's up
-				return netlink.LinkSetUp(existing)
-			}
-		}
-		// Wrong type or wrong VNI, delete and recreate (keeps config canonical).
-		if err := netlink.LinkDel(existing); err != nil {
-			return fmt.Errorf("failed to delete existing interface %s: %w", cfg.Name, err)
-		}
-	}
-
 	// Set defaults
 	if cfg.DstPort == 0 {
 		cfg.DstPort = 4789
 	}
 	if cfg.MTU == 0 {
 		cfg.MTU = 1450
+	}
+
+	// Reconcile an existing interface of the same name.
+	existing, err := netlink.LinkByName(cfg.Name)
+	if err == nil {
+		vxlan, ok := existing.(*netlink.Vxlan)
+		if !ok {
+			// Refuse to destroy a non-VXLAN interface that happens to share the name.
+			return fmt.Errorf("interface %s exists but is not a VXLAN (%T); refusing to replace it", cfg.Name, existing)
+		}
+		if vxlan.VxlanId == cfg.VNI {
+			// Same VNI: reconcile MTU, ensure up, and (re)attach to the bridge.
+			if cfg.MTU > 0 && existing.Attrs().MTU != cfg.MTU {
+				if err := netlink.LinkSetMTU(existing, cfg.MTU); err != nil {
+					return fmt.Errorf("failed to set MTU on vxlan %s: %w", cfg.Name, err)
+				}
+			}
+			if err := netlink.LinkSetUp(existing); err != nil {
+				return fmt.Errorf("failed to bring up vxlan %s: %w", cfg.Name, err)
+			}
+			if cfg.Bridge != "" {
+				if err := m.AttachToBridge(cfg.Name, cfg.Bridge); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// VNI changed: the kernel cannot mutate the VNI in place, so recreate.
+		if err := netlink.LinkDel(existing); err != nil {
+			return fmt.Errorf("failed to delete vxlan %s for VNI change: %w", cfg.Name, err)
+		}
 	}
 
 	// Create VXLAN interface

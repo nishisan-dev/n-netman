@@ -65,6 +65,8 @@ func (m *RouteManager) Add(cfg RouteConfig) error {
 }
 
 // Delete removes a route from the routing table.
+// When cfg.Protocol is set, the deletion is scoped to routes installed by that
+// protocol, so we never remove a route the daemon did not install.
 func (m *RouteManager) Delete(cfg RouteConfig) error {
 	route := &netlink.Route{
 		Dst: cfg.Destination,
@@ -73,6 +75,10 @@ func (m *RouteManager) Delete(cfg RouteConfig) error {
 
 	if cfg.Table > 0 {
 		route.Table = cfg.Table
+	}
+
+	if cfg.Protocol != 0 {
+		route.Protocol = netlink.RouteProtocol(cfg.Protocol)
 	}
 
 	if err := netlink.RouteDel(route); err != nil {
@@ -188,6 +194,7 @@ func (m *RouteManager) FlushByProtocol(table, protocol int) error {
 			Destination: r.Destination,
 			Gateway:     r.Gateway,
 			Table:       table,
+			Protocol:    protocol,
 		}
 		if err := m.Delete(cfg); err != nil {
 			// Log but continue
@@ -257,6 +264,7 @@ func (m *RouteManager) Sync(table int, desired []RouteConfig) error {
 				Destination: r.Destination,
 				Gateway:     r.Gateway,
 				Table:       table,
+				Protocol:    RouteProtocolNNetMan,
 			}
 			if err := m.Delete(cfg); err != nil {
 				fmt.Printf("warning: failed to remove stale route %s: %v\n", r.Destination, err)

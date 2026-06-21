@@ -14,12 +14,20 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/nishisan-dev/n-netman/api/v1"
 	"github.com/nishisan-dev/n-netman/internal/config"
 	"github.com/nishisan-dev/n-netman/internal/observability"
 )
+
+// peerRPCTimeout bounds every outbound control-plane RPC so a hung peer cannot
+// stall route propagation to the others.
+const peerRPCTimeout = 10 * time.Second
+
+// maxRecvMsgSize caps the size of an inbound route message (DoS guard).
+const maxRecvMsgSize = 1 << 20 // 1 MiB
 
 // Route represents a network route for exchange between peers.
 type Route struct {
@@ -35,9 +43,18 @@ type Route struct {
 }
 
 // RouteTable stores learned routes from peers.
+//
+// Routes are keyed by (VNI, prefix, peerID) so that the same prefix announced
+// in different overlays or by different peers does not collapse into a single
+// last-writer-wins entry.
 type RouteTable struct {
 	mu     sync.RWMutex
-	routes map[string]Route // key: prefix; last writer wins on collisions
+	routes map[string]Route
+}
+
+// routeKey is the composite identity of a route within the table.
+func routeKey(r Route) string {
+	return fmt.Sprintf("%d|%s|%s", r.VNI, r.Prefix, r.PeerID)
 }
 
 // NewRouteTable creates a new route table.
@@ -57,29 +74,46 @@ func (rt *RouteTable) Add(r Route) {
 	if r.LeaseSeconds > 0 {
 		r.ExpiresAt = r.ReceivedAt.Add(time.Duration(r.LeaseSeconds) * time.Second)
 	}
-	rt.routes[r.Prefix] = r
+	rt.routes[routeKey(r)] = r
 }
 
-// Remove removes a route by prefix.
-func (rt *RouteTable) Remove(prefix string) {
+// Remove removes the exact route (matched by VNI+prefix+peer).
+func (rt *RouteTable) Remove(r Route) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	delete(rt.routes, prefix)
+	delete(rt.routes, routeKey(r))
 }
 
-// RemoveByPeer removes all routes from a specific peer.
-func (rt *RouteTable) RemoveByPeer(peerID string) int {
+// RemoveByPrefixPeer removes every route for a given prefix announced by a
+// specific peer (across all VNIs) and returns the removed routes so the caller
+// can withdraw them from the kernel.
+func (rt *RouteTable) RemoveByPrefixPeer(prefix, peerID string) []Route {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	count := 0
-	for prefix, r := range rt.routes {
-		if r.PeerID == peerID {
-			delete(rt.routes, prefix)
-			count++
+	var removed []Route
+	for k, r := range rt.routes {
+		if r.Prefix == prefix && r.PeerID == peerID {
+			removed = append(removed, r)
+			delete(rt.routes, k)
 		}
 	}
-	return count
+	return removed
+}
+
+// RemoveByPeer removes all routes from a specific peer and returns them.
+func (rt *RouteTable) RemoveByPeer(peerID string) []Route {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	var removed []Route
+	for k, r := range rt.routes {
+		if r.PeerID == peerID {
+			removed = append(removed, r)
+			delete(rt.routes, k)
+		}
+	}
+	return removed
 }
 
 // GetByPeer returns all routes from a specific peer.
@@ -94,14 +128,6 @@ func (rt *RouteTable) GetByPeer(peerID string) []Route {
 		}
 	}
 	return routes
-}
-
-// Get returns a route by prefix.
-func (rt *RouteTable) Get(prefix string) (Route, bool) {
-	rt.mu.RLock()
-	defer rt.mu.RUnlock()
-	r, ok := rt.routes[prefix]
-	return r, ok
 }
 
 // All returns all routes.
@@ -124,10 +150,10 @@ func (rt *RouteTable) ExpireStale() []Route {
 
 	now := time.Now()
 	var expired []Route
-	for prefix, r := range rt.routes {
+	for key, r := range rt.routes {
 		if !r.ExpiresAt.IsZero() && r.ExpiresAt.Before(now) {
 			expired = append(expired, r)
-			delete(rt.routes, prefix)
+			delete(rt.routes, key)
 		}
 	}
 	return expired
@@ -146,6 +172,8 @@ type Server struct {
 
 	// Callback invoked when routes are received (for integrating with RouteManager)
 	onRoutesReceived func(routes []Route)
+	// Callback invoked when routes are withdrawn (to remove them from the kernel)
+	onRoutesWithdrawn func(routes []Route)
 
 	mu        sync.RWMutex
 	started   bool
@@ -158,6 +186,9 @@ func NewServer(cfg *config.Config, routeTable *RouteTable, logger *slog.Logger) 
 		cfg:        cfg,
 		routeTable: routeTable,
 		logger:     logger,
+		// Set once at construction so it can be read without locking (e.g. in
+		// the Keepalive handler running on another goroutine).
+		startTime: time.Now(),
 	}
 }
 
@@ -166,6 +197,14 @@ func (s *Server) SetRoutesReceivedCallback(fn func(routes []Route)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onRoutesReceived = fn
+}
+
+// SetRoutesWithdrawnCallback sets the callback invoked when a peer withdraws
+// routes, so they can be removed from the kernel.
+func (s *Server) SetRoutesWithdrawnCallback(fn func(routes []Route)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRoutesWithdrawn = fn
 }
 
 // Start starts the gRPC server.
@@ -188,11 +227,19 @@ func (s *Server) Start() error {
 	}
 	s.listener = listener
 
-	// Configure TLS if enabled
+	// Configure TLS if enabled. Bound message size, concurrent streams and
+	// connection setup time to limit resource-exhaustion from a hostile peer.
 	opts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(maxRecvMsgSize),
+		grpc.MaxConcurrentStreams(64),
+		grpc.ConnectionTimeout(15 * time.Second),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			Time:    30 * time.Second,
 			Timeout: 10 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             15 * time.Second,
+			PermitWithoutStream: true,
 		}),
 	}
 
@@ -212,7 +259,6 @@ func (s *Server) Start() error {
 
 	s.mu.Lock()
 	s.started = true
-	s.startTime = time.Now()
 	s.mu.Unlock()
 
 	// Load local routes from config overlays
@@ -258,28 +304,75 @@ func (s *Server) LoadLocalRoutes() {
 // Stop gracefully stops the server.
 func (s *Server) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.started {
+		s.mu.Unlock()
 		return
 	}
-
-	s.grpcServer.GracefulStop()
 	s.started = false
+	srv := s.grpcServer
+	s.mu.Unlock()
+
+	// GracefulStop blocks until in-flight handlers return; those handlers take
+	// s.mu, so it must run without the lock held to avoid a shutdown deadlock.
+	if srv != nil {
+		srv.GracefulStop()
+	}
 	s.logger.Info("control plane server stopped")
 }
 
-// ExchangeState implements the ExchangeState RPC.
-// Called when a peer connects to perform initial state synchronization.
-func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.StateResponse, error) {
-	s.logger.Info("received state exchange request",
-		"peer_id", req.NodeId,
-		"route_count", len(req.Routes),
-	)
+// authenticatedPeerID returns the CommonName of the verified client certificate
+// when the connection is mTLS-protected. The bool is false when the request is
+// not authenticated via a verified client certificate (e.g. TLS disabled).
+func authenticatedPeerID(ctx context.Context) (string, bool) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", false
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return "", false
+	}
+	chains := tlsInfo.State.VerifiedChains
+	if len(chains) == 0 || len(chains[0]) == 0 {
+		return "", false
+	}
+	return chains[0][0].Subject.CommonName, true
+}
 
-	// Process incoming routes from the peer before returning our current view.
-	incomingRoutes := make([]Route, 0, len(req.Routes))
-	for _, r := range req.Routes {
+// resolvePeerID binds the claimed node id to the authenticated identity. Under
+// mTLS, the verified certificate CommonName is authoritative: a request whose
+// node_id does not match it is rejected (prevents a peer from spoofing another's
+// identity to inject or withdraw routes). When the connection is not mTLS, the
+// claimed id is used as-is (control plane runs without authentication).
+func (s *Server) resolvePeerID(ctx context.Context, claimed string) (string, error) {
+	cn, ok := authenticatedPeerID(ctx)
+	if !ok {
+		if claimed == "" {
+			return "", status.Error(codes.InvalidArgument, "node_id is required")
+		}
+		return claimed, nil
+	}
+	if claimed != "" && claimed != cn {
+		return "", status.Errorf(codes.PermissionDenied,
+			"node_id %q does not match authenticated identity %q", claimed, cn)
+	}
+	return cn, nil
+}
+
+// ingestRoutes validates and stores routes announced by a peer, rejecting
+// entries with an invalid prefix or next-hop so a misbehaving peer cannot
+// poison the route table. Returns the accepted routes.
+func (s *Server) ingestRoutes(pbRoutes []*pb.Route, peerID string) []Route {
+	out := make([]Route, 0, len(pbRoutes))
+	for _, r := range pbRoutes {
+		if _, _, err := net.ParseCIDR(r.Prefix); err != nil {
+			s.logger.Warn("rejecting route with invalid prefix", "prefix", r.Prefix, "peer", peerID)
+			continue
+		}
+		if r.NextHop != "" && net.ParseIP(r.NextHop) == nil {
+			s.logger.Warn("rejecting route with invalid next-hop", "next_hop", r.NextHop, "peer", peerID)
+			continue
+		}
 		route := Route{
 			Prefix:       r.Prefix,
 			NextHop:      r.NextHop,
@@ -287,11 +380,29 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 			LeaseSeconds: r.LeaseSeconds,
 			Tags:         r.Tags,
 			VNI:          r.Vni,
-			PeerID:       req.NodeId,
+			PeerID:       peerID,
 		}
 		s.routeTable.Add(route)
-		incomingRoutes = append(incomingRoutes, route)
+		out = append(out, route)
 	}
+	return out
+}
+
+// ExchangeState implements the ExchangeState RPC.
+// Called when a peer connects to perform initial state synchronization.
+func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.StateResponse, error) {
+	peerID, err := s.resolvePeerID(ctx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("received state exchange request",
+		"peer_id", peerID,
+		"route_count", len(req.Routes),
+	)
+
+	// Process incoming routes from the peer before returning our current view.
+	incomingRoutes := s.ingestRoutes(req.Routes, peerID)
 
 	// Invoke callback if set
 	s.mu.RLock()
@@ -302,7 +413,7 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 	}
 
 	s.logger.Info("processed peer routes",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"imported_count", len(incomingRoutes),
 	)
 
@@ -331,26 +442,18 @@ func (s *Server) ExchangeState(ctx context.Context, req *pb.StateRequest) (*pb.S
 // AnnounceRoutes implements the AnnounceRoutes RPC.
 // Called when a peer announces new or updated routes.
 func (s *Server) AnnounceRoutes(ctx context.Context, req *pb.RouteAnnouncement) (*pb.RouteAck, error) {
+	peerID, err := s.resolvePeerID(ctx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
 	s.logger.Debug("received route announcement",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"route_count", len(req.Routes),
 	)
 
-	// Process incoming routes
-	incomingRoutes := make([]Route, 0, len(req.Routes))
-	for _, r := range req.Routes {
-		route := Route{
-			Prefix:       r.Prefix,
-			NextHop:      r.NextHop,
-			Metric:       r.Metric,
-			LeaseSeconds: r.LeaseSeconds,
-			Tags:         r.Tags,
-			VNI:          r.Vni,
-			PeerID:       req.NodeId,
-		}
-		s.routeTable.Add(route)
-		incomingRoutes = append(incomingRoutes, route)
-	}
+	// Validate and store incoming routes.
+	incomingRoutes := s.ingestRoutes(req.Routes, peerID)
 
 	// Invoke callback if set
 	s.mu.RLock()
@@ -361,41 +464,51 @@ func (s *Server) AnnounceRoutes(ctx context.Context, req *pb.RouteAnnouncement) 
 	}
 
 	s.logger.Info("processed route announcement",
-		"peer_id", req.NodeId,
-		"count", len(req.Routes),
+		"peer_id", peerID,
+		"count", len(incomingRoutes),
 	)
 
 	return &pb.RouteAck{
 		Accepted:        true,
-		RoutesProcessed: uint32(len(req.Routes)),
+		RoutesProcessed: uint32(len(incomingRoutes)),
 	}, nil
 }
 
 // WithdrawRoutes implements the WithdrawRoutes RPC.
 // Called when a peer withdraws routes.
 func (s *Server) WithdrawRoutes(ctx context.Context, req *pb.RouteWithdrawal) (*pb.RouteAck, error) {
+	peerID, err := s.resolvePeerID(ctx, req.NodeId)
+	if err != nil {
+		return nil, err
+	}
+
 	s.logger.Info("received route withdrawal",
-		"peer_id", req.NodeId,
+		"peer_id", peerID,
 		"prefix_count", len(req.Prefixes),
 	)
 
-	count := 0
+	// Remove the withdrawn prefixes for this peer (across VNIs) and collect them
+	// so the kernel routes can be deleted via the callback.
+	var withdrawn []Route
 	for _, prefix := range req.Prefixes {
-		// Only remove if the route was from this peer
-		if r, ok := s.routeTable.Get(prefix); ok && r.PeerID == req.NodeId {
-			s.routeTable.Remove(prefix)
-			count++
-		}
+		withdrawn = append(withdrawn, s.routeTable.RemoveByPrefixPeer(prefix, peerID)...)
+	}
+
+	s.mu.RLock()
+	callback := s.onRoutesWithdrawn
+	s.mu.RUnlock()
+	if callback != nil && len(withdrawn) > 0 {
+		callback(withdrawn)
 	}
 
 	s.logger.Info("processed route withdrawal",
-		"peer_id", req.NodeId,
-		"removed_count", count,
+		"peer_id", peerID,
+		"removed_count", len(withdrawn),
 	)
 
 	return &pb.RouteAck{
 		Accepted:        true,
-		RoutesProcessed: uint32(count),
+		RoutesProcessed: uint32(len(withdrawn)),
 	}, nil
 }
 
@@ -450,8 +563,19 @@ type Client struct {
 	routeTable *RouteTable
 	logger     *slog.Logger
 
+	// Callback invoked when routes are learned from a peer (to install them).
+	onRoutesReceived func(routes []Route)
+
 	mu    sync.RWMutex
 	conns map[string]*peerConn // key: peer ID
+}
+
+// SetRoutesReceivedCallback sets the callback for routes learned on the client
+// path (e.g. ExchangeState responses), so they are installed in the kernel.
+func (c *Client) SetRoutesReceivedCallback(fn func(routes []Route)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onRoutesReceived = fn
 }
 
 // peerConn represents a connection to a peer.
@@ -474,12 +598,14 @@ func NewClient(cfg *config.Config, routeTable *RouteTable, logger *slog.Logger) 
 	}
 }
 
-// ConnectToPeers establishes connections to all configured peers.
-func (c *Client) ConnectToPeers(ctx context.Context) error {
+// ConnectToPeers establishes connections to all configured peers that are not
+// already connected. It is safe to call repeatedly to pick up peers that were
+// missing on a previous attempt.
+func (c *Client) ConnectToPeers() error {
 	var firstErr error
-	// Note: peers come from legacy overlay config (v1); v2 overlays store peers elsewhere.
-	for _, peer := range c.cfg.Overlay.Peers {
-		if err := c.connectPeer(ctx, peer); err != nil {
+	// Peers are resolved version-aware (root 'peers:' for v2, 'overlay.peers' for v1).
+	for _, peer := range c.cfg.GetPeers() {
+		if err := c.connectPeer(peer); err != nil {
 			c.logger.Warn("failed to connect to peer",
 				"peer_id", peer.ID,
 				"address", peer.Endpoint.Address,
@@ -494,8 +620,10 @@ func (c *Client) ConnectToPeers(ctx context.Context) error {
 	return firstErr
 }
 
-// connectPeer establishes a connection to a single peer.
-func (c *Client) connectPeer(ctx context.Context, peer config.PeerConfig) error {
+// connectPeer establishes a (lazy) connection to a single peer. The underlying
+// grpc.ClientConn reconnects transparently with backoff after transient
+// failures, so this only needs to create the connection once per peer.
+func (c *Client) connectPeer(peer config.PeerConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -512,7 +640,8 @@ func (c *Client) connectPeer(ctx context.Context, peer config.PeerConfig) error 
 	var transportCreds credentials.TransportCredentials
 	if c.cfg.Security.ControlPlane.TLS.Enabled {
 		var err error
-		transportCreds, err = LoadClientTLSConfig(&c.cfg.Security.ControlPlane.TLS)
+		// The peer endpoint address must be present in the peer certificate SANs.
+		transportCreds, err = LoadClientTLSConfig(&c.cfg.Security.ControlPlane.TLS, peer.Endpoint.Address)
 		if err != nil {
 			return fmt.Errorf("failed to load TLS config: %w", err)
 		}
@@ -529,9 +658,9 @@ func (c *Client) connectPeer(ctx context.Context, peer config.PeerConfig) error 
 		}),
 	}
 
-	conn, err := grpc.DialContext(ctx, addr, opts...)
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
-		return fmt.Errorf("failed to dial %s: %w", addr, err)
+		return fmt.Errorf("failed to create client for %s: %w", addr, err)
 	}
 
 	client := pb.NewNNetManClient(conn)
@@ -609,12 +738,16 @@ func (c *Client) ExchangeStateWithPeers(ctx context.Context, localRoutes []Route
 
 // exchangeWithPeer performs state exchange with a single peer.
 func (c *Client) exchangeWithPeer(ctx context.Context, pc *peerConn, req *pb.StateRequest) error {
-	resp, err := pc.client.ExchangeState(ctx, req)
+	rpcCtx, cancel := context.WithTimeout(ctx, peerRPCTimeout)
+	defer cancel()
+
+	resp, err := pc.client.ExchangeState(rpcCtx, req)
 	if err != nil {
 		return fmt.Errorf("ExchangeState RPC failed: %w", err)
 	}
 
-	// Store received routes
+	// Store received routes and install them in the kernel via the callback.
+	received := make([]Route, 0, len(resp.Routes))
 	for _, r := range resp.Routes {
 		route := Route{
 			Prefix:       r.Prefix,
@@ -626,6 +759,14 @@ func (c *Client) exchangeWithPeer(ctx context.Context, pc *peerConn, req *pb.Sta
 			PeerID:       resp.NodeId,
 		}
 		c.routeTable.Add(route)
+		received = append(received, route)
+	}
+
+	c.mu.RLock()
+	callback := c.onRoutesReceived
+	c.mu.RUnlock()
+	if callback != nil && len(received) > 0 {
+		callback(received)
 	}
 
 	c.logger.Info("exchanged state with peer",
@@ -695,7 +836,10 @@ func (c *Client) AnnounceRoutes(ctx context.Context, routes []Route) error {
 
 // announceToSinglePeer sends routes to a single peer.
 func (c *Client) announceToSinglePeer(ctx context.Context, pc *peerConn, req *pb.RouteAnnouncement) error {
-	resp, err := pc.client.AnnounceRoutes(ctx, req)
+	rpcCtx, cancel := context.WithTimeout(ctx, peerRPCTimeout)
+	defer cancel()
+
+	resp, err := pc.client.AnnounceRoutes(rpcCtx, req)
 	if err != nil {
 		return fmt.Errorf("AnnounceRoutes RPC failed: %w", err)
 	}
@@ -743,7 +887,9 @@ func (c *Client) WithdrawRoutes(ctx context.Context, prefixes []string) error {
 	}
 
 	for _, pc := range peers {
-		_, err := pc.client.WithdrawRoutes(ctx, req)
+		rpcCtx, cancel := context.WithTimeout(ctx, peerRPCTimeout)
+		_, err := pc.client.WithdrawRoutes(rpcCtx, req)
+		cancel()
 		if err != nil {
 			c.logger.Warn("failed to withdraw routes from peer",
 				"peer_id", pc.peerID,
@@ -863,7 +1009,7 @@ func (c *Client) GetPeerStatuses() map[string]observability.PeerStatus {
 	result := make(map[string]observability.PeerStatus)
 
 	// Start with configured peers
-	for _, peer := range c.cfg.Overlay.Peers {
+	for _, peer := range c.cfg.GetPeers() {
 		ps := observability.PeerStatus{
 			ID:       peer.ID,
 			Endpoint: peer.Endpoint.Address,
@@ -904,8 +1050,10 @@ func (c *Client) GetPeerStatuses() map[string]observability.PeerStatus {
 func (c *Client) GetRouteStats() observability.RouteStats {
 	stats := observability.RouteStats{}
 
-	// Exported routes from config
-	stats.Exported = len(c.cfg.Routing.Export.Networks)
+	// Exported routes from config, summed across all overlays (v1 and v2).
+	for _, o := range c.cfg.GetOverlays() {
+		stats.Exported += len(o.Routing.Export.Networks)
+	}
 
 	// Installed routes (routes received from peers)
 	for _, route := range c.routeTable.All() {

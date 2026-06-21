@@ -101,54 +101,42 @@ func (m *Manager) ShouldImport(route controlplane.Route) bool {
 		return false
 	}
 
-	// Check deny list first (deny takes precedence)
-	for _, denyPrefix := range importCfg.Deny {
-		if matchesPrefix(routeNet, denyPrefix) {
-			return false
-		}
-	}
-
-	// If accept_all is true, accept (unless denied above)
-	if importCfg.AcceptAll {
-		return true
-	}
-
-	// Check allow list
-	for _, allowPrefix := range importCfg.Allow {
-		if matchesPrefix(routeNet, allowPrefix) {
-			return true
-		}
-	}
-
-	return false
+	return evalImportPolicy(routeNet, importCfg)
 }
 
 // ShouldImportForOverlay checks if a route should be imported for a specific overlay.
 // Each overlay has its own import policy defined in overlay.Routing.Import.
 func (m *Manager) ShouldImportForOverlay(route controlplane.Route, overlay config.OverlayDef) bool {
-	importCfg := overlay.Routing.Import
-
 	// Parse the route's prefix
 	_, routeNet, err := net.ParseCIDR(route.Prefix)
 	if err != nil {
 		return false
 	}
 
-	// Check deny list first (deny takes precedence)
+	return evalImportPolicy(routeNet, overlay.Routing.Import)
+}
+
+// evalImportPolicy applies an import policy to a parsed route network.
+// Deny takes precedence and matches on overlap (a broader announced prefix that
+// overlaps a denied subnet is still denied). Allow only matches when the route
+// is contained within an allowed supernet. With neither accept_all nor a
+// matching allow entry, the route is denied (secure default).
+func evalImportPolicy(routeNet *net.IPNet, importCfg config.ImportConfig) bool {
+	// Deny list first (deny takes precedence) — overlap semantics.
 	for _, denyPrefix := range importCfg.Deny {
-		if matchesPrefix(routeNet, denyPrefix) {
+		if prefixOverlaps(routeNet, denyPrefix) {
 			return false
 		}
 	}
 
-	// If accept_all is true, accept (unless denied above)
+	// accept_all admits everything not explicitly denied above.
 	if importCfg.AcceptAll {
 		return true
 	}
 
-	// Check allow list
+	// Allow list — the route must be within (subset of) an allowed prefix.
 	for _, allowPrefix := range importCfg.Allow {
-		if matchesPrefix(routeNet, allowPrefix) {
+		if prefixWithin(routeNet, allowPrefix) {
 			return true
 		}
 	}
@@ -165,25 +153,32 @@ func (m *Manager) GetImportTableForOverlay(overlay config.OverlayDef) int {
 	return table
 }
 
-// matchesPrefix checks if a route network matches a policy prefix.
-// The policy prefix can be a supernet (the route is within the allowed range).
-func matchesPrefix(routeNet *net.IPNet, policyPrefix string) bool {
+// prefixWithin reports whether routeNet is contained within (a subset of) the
+// policy prefix — i.e. the policy is a supernet of, or equal to, the route.
+// Used for allow lists, where admitting a broader route than allowed would
+// leak more than intended.
+func prefixWithin(routeNet *net.IPNet, policyPrefix string) bool {
 	_, policyNet, err := net.ParseCIDR(policyPrefix)
 	if err != nil {
 		return false
 	}
-
-	// Check if the route's network is within the policy network
-	// The policy network should contain the route's network
-	routeIP := routeNet.IP
-	if policyNet.Contains(routeIP) {
-		// Also check that policy is same size or larger (supernet or exact match)
-		policyOnes, _ := policyNet.Mask.Size()
-		routeOnes, _ := routeNet.Mask.Size()
-		return policyOnes <= routeOnes
+	if !policyNet.Contains(routeNet.IP) {
+		return false
 	}
+	policyOnes, _ := policyNet.Mask.Size()
+	routeOnes, _ := routeNet.Mask.Size()
+	return policyOnes <= routeOnes
+}
 
-	return false
+// prefixOverlaps reports whether routeNet and the policy prefix overlap in any
+// way — either one contains the other. Used for deny lists so that a broader
+// announced prefix that swallows a denied subnet is still rejected.
+func prefixOverlaps(routeNet *net.IPNet, policyPrefix string) bool {
+	_, policyNet, err := net.ParseCIDR(policyPrefix)
+	if err != nil {
+		return false
+	}
+	return policyNet.Contains(routeNet.IP) || routeNet.Contains(policyNet.IP)
 }
 
 // FilterImportRoutes filters a list of routes according to import policy.

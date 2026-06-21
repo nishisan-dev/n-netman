@@ -56,8 +56,8 @@ func GenerateHostCert(outputDir, caCertPath, caKeyPath, hostname string, ips []n
 		return fmt.Errorf("failed to create host certificate: %w", err)
 	}
 
-	// 5. Save to files
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	// 5. Save to files. The directory holds private keys, so keep it owner-only.
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 

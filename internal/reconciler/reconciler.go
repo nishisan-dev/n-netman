@@ -4,6 +4,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nishisan-dev/n-netman/internal/config"
 	nlink "github.com/nishisan-dev/n-netman/internal/netlink"
+	"github.com/nishisan-dev/n-netman/internal/observability"
 	"github.com/vishvananda/netlink"
 )
 
@@ -25,6 +27,7 @@ type Reconciler struct {
 
 	interval time.Duration
 	logger   *slog.Logger
+	metrics  *observability.Metrics
 
 	mu      sync.RWMutex
 	running bool
@@ -65,6 +68,13 @@ func WithInterval(d time.Duration) Option {
 func WithLogger(l *slog.Logger) Option {
 	return func(r *Reconciler) {
 		r.logger = l
+	}
+}
+
+// WithMetrics wires Prometheus metrics into the reconciler.
+func WithMetrics(m *observability.Metrics) Option {
+	return func(r *Reconciler) {
+		r.metrics = m
 	}
 }
 
@@ -109,9 +119,15 @@ func (r *Reconciler) Run(ctx context.Context) error {
 
 // Reconcile performs a single reconciliation cycle.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
+	start := time.Now()
 	r.mu.Lock()
-	r.lastRun = time.Now()
+	r.lastRun = start
 	r.mu.Unlock()
+
+	if r.metrics != nil {
+		r.metrics.ReconciliationsTotal.Inc()
+		defer func() { r.metrics.ReconciliationDuration.Observe(time.Since(start).Seconds()) }()
+	}
 
 	r.logger.Debug("starting reconciliation")
 
@@ -122,17 +138,56 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	// Reconcile each overlay
+	// Reconcile each overlay independently: a failure in one overlay must not
+	// prevent the others from being reconciled.
+	var errs []error
 	for _, overlay := range overlays {
 		if err := r.reconcileOverlay(ctx, overlay); err != nil {
-			r.setError(err)
-			return fmt.Errorf("overlay %s (VNI %d) reconciliation failed: %w", overlay.Name, overlay.VNI, err)
+			r.logger.Error("overlay reconciliation failed",
+				"overlay", overlay.Name, "vni", overlay.VNI, "error", err)
+			errs = append(errs, fmt.Errorf("overlay %s (VNI %d): %w", overlay.Name, overlay.VNI, err))
 		}
+	}
+
+	r.updateNetworkMetrics(overlays)
+
+	if len(errs) > 0 {
+		err := errors.Join(errs...)
+		r.setError(err)
+		if r.metrics != nil {
+			r.metrics.ReconciliationErrors.Inc()
+		}
+		return err
 	}
 
 	r.logger.Debug("reconciliation complete", "overlay_count", len(overlays))
 	r.setError(nil)
+	if r.metrics != nil {
+		r.metrics.LastReconcileTime.SetToCurrentTime()
+	}
 	return nil
+}
+
+// updateNetworkMetrics refreshes the active-resource gauges from kernel state.
+func (r *Reconciler) updateNetworkMetrics(overlays []config.OverlayDef) {
+	if r.metrics == nil {
+		return
+	}
+	var vxlans, bridges, fdbEntries int
+	for _, o := range overlays {
+		if r.vxlan.Exists(o.Name) {
+			vxlans++
+		}
+		if r.bridge.Exists(o.Bridge.Name) {
+			bridges++
+		}
+		if entries, err := r.fdb.List(o.Name); err == nil {
+			fdbEntries += len(entries)
+		}
+	}
+	r.metrics.VXLANsActive.Set(float64(vxlans))
+	r.metrics.BridgesActive.Set(float64(bridges))
+	r.metrics.FDBEntriesTotal.Set(float64(fdbEntries))
 }
 
 // reconcileOverlay reconciles a single overlay (bridge, VXLAN, FDB).
@@ -294,8 +349,9 @@ func (r *Reconciler) reconcileFDBForOverlay(ctx context.Context, overlay config.
 	}
 
 	// Head-end replication mode: populate FDB with 00:00:00:00:00:00 entries
-	// This is required for BUM traffic even when learning=true
-	peers := r.cfg.GetPeers()
+	// This is required for BUM traffic even when learning=true. Only peers that
+	// participate in this overlay's VNI are flooded (avoids cross-overlay leak).
+	peers := r.cfg.GetPeersForVNI(overlay.VNI)
 
 	// Build list of peer IPs
 	var peerIPs []net.IP

@@ -97,9 +97,9 @@ func deleteRuleViaCLI(direction, ifname string, table, priority int) error {
 	return nil
 }
 
-// ListRulesByTable returns all rules pointing to a specific table.
+// ListRulesByTable returns all rules pointing to a specific table (both families).
 func ListRulesByTable(table int) ([]netlink.Rule, error) {
-	rules, err := netlink.RuleList(netlink.FAMILY_V4)
+	rules, err := netlink.RuleList(netlink.FAMILY_ALL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list rules: %w", err)
 	}

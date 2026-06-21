@@ -254,8 +254,10 @@ nnet version
 
 **Saída:**
 ```
-nnet version v0.1.0
+nnet dev (commit: unknown, built: unknown)
 ```
+
+O formato é `nnet <version> (commit: <commit>, built: <date>)`. Em builds de release esses valores são injetados via ldflags; em builds locais aparecem como `dev` / `unknown`.
 
 ---
 
@@ -293,8 +295,7 @@ nnetd -version
 | Flag | Descrição |
 |------|-----------|
 | `-c, --config` | Caminho para arquivo de configuração |
-| `-v, --verbose` | Aumenta verbosidade do log |
-| `--help` | Mostra ajuda |
+| `-h, --help` | Mostra ajuda |
 
 ---
 

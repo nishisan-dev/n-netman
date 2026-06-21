@@ -29,6 +29,8 @@ observability:                # Logs, métricas, healthchecks
 
 A versão 2 é recomendada para novos deployments.
 
+**Importante:** O campo `version:` é **obrigatório** — não há mais default `1`. Um arquivo sem a chave `version` é rejeitado na validação.
+
 ---
 
 ## Seção: node
@@ -149,8 +151,9 @@ overlays:
           table: 100
           lookup_rules:
             enabled: true
-            priority: 100
 ```
+
+**Nota:** A prioridade das `ip rule` criadas é fixa no código (não configurável): a regra `iif` usa prioridade `100` e a regra `oif` usa `101`.
 
 ### Campos do Overlay
 
@@ -188,7 +191,7 @@ routing:
   export:
     networks:
       - "172.16.10.0/24"
-    include_connected: true
+    include_connected: true   # Reservado — NÃO implementado (ignorado)
     metric: 100
   import:
     accept_all: false
@@ -202,8 +205,43 @@ routing:
       route_lease_seconds: 30
       lookup_rules:
         enabled: true         # Cria ip rule iif/oif
-        priority: 100         # Prioridade das rules
 ```
+
+**Nota:** A prioridade das `ip rule` é fixa no código (não configurável): `iif` usa prioridade `100` e `oif` usa `101`.
+
+### Validação de Overlays (v2)
+
+Cada overlay deve ser único. São rejeitados na validação overlays com `vni`, `name`, `bridge.name` ou `import.install.table` duplicados entre si — cada overlay precisa da sua própria tabela de roteamento.
+
+### Peers (v2 — nível raiz)
+
+No schema v2, os peers são declarados no **nível raiz** da configuração através da chave `peers:` (não dentro de `overlay.peers`). Cada peer pode opcionalmente declarar `vnis` para limitar a quais overlays ele pertence; se `vnis` for omitido, o peer participa de **todos** os overlays.
+
+```yaml
+peers:
+  - id: "peer-01"
+    endpoint:
+      address: "192.168.1.10"
+    vnis: [100, 200]          # Restringe o peer aos overlays VNI 100 e 200
+    health:
+      keepalive_interval_ms: 1500
+      dead_after_ms: 6000
+
+  - id: "peer-02"
+    endpoint:
+      address: "192.168.1.11"
+    # vnis omitido -> participa de todos os overlays
+```
+
+| Campo | Tipo | Default | Descrição |
+|-------|------|---------|-----------|
+| `id` | string | (obrigatório) | ID do peer (deve casar com o CN do certificado quando TLS habilitado) |
+| `endpoint.address` | string | (obrigatório) | IP underlay do peer |
+| `vnis` | []int | (todos) | Lista de VNIs aos quais o peer pertence; omitido = todos |
+| `health.keepalive_interval_ms` | int | 1500 | Intervalo de keepalive |
+| `health.dead_after_ms` | int | 6000 | Timeout para marcar peer como dead |
+
+Consulte `examples/multi-overlay.yaml` como referência canônica de configuração v2.
 
 ---
 
@@ -254,11 +292,11 @@ Políticas globais de roteamento (schema v1).
 routing:
   enabled: true
   export:
-    export_all: false
-    networks:
+    export_all: false             # Reservado — NÃO implementado (ignorado)
+    networks:                      # Única fonte de export hoje
       - "172.16.10.0/24"
-    include_connected: true
-    include_netplan_static: true
+    include_connected: true        # Reservado — NÃO implementado (ignorado)
+    include_netplan_static: true   # Reservado — NÃO implementado (ignorado)
     metric: 100
   import:
     accept_all: false
@@ -314,15 +352,23 @@ security:
       cert_file: "/etc/n-netman/tls/server.crt"
       key_file: "/etc/n-netman/tls/server.key"
       ca_file: "/etc/n-netman/tls/ca.crt"
-      skip_verify: false      # Apenas para labs
 ```
 
 | Campo | Tipo | Default | Descrição |
 |-------|------|---------|-----------|
 | `listen.address` | string | "0.0.0.0" | Endereço de bind |
 | `listen.port` | int | 9898 | Porta gRPC |
-| `tls.enabled` | bool | false | Habilita TLS |
-| `tls.skip_verify` | bool | false | Ignora verificação de certificado |
+| `tls.enabled` | bool | false | Habilita TLS (mTLS) |
+| `tls.cert_file` | string | "" | Certificado do nó (obrigatório se `enabled`) |
+| `tls.key_file` | string | "" | Chave privada do nó (obrigatório se `enabled`) |
+| `tls.ca_file` | string | "" | CA que assina os certificados (obrigatório se `enabled`) |
+
+**Importante:** Quando `tls.enabled: true`, os três arquivos `cert_file`, `key_file` **e** `ca_file` são **obrigatórios**. O daemon recusa subir sem CA — a verificação do certificado do servidor nunca é ignorada.
+
+**Identidade via mTLS:**
+
+- O certificado de cada peer deve conter o **endereço de endpoint** do peer nos SANs (Subject Alternative Names); caso contrário a verificação TLS falha.
+- O **CommonName (CN)** do certificado deve ser igual ao `node.id` do peer. A identidade é autenticada via mTLS: um `node_id` enviado que não bate com o CN do certificado apresentado é **rejeitado** (impede que um peer falsifique a identidade de outro).
 
 **Geração de certificados:**
 
@@ -377,7 +423,6 @@ Valores aplicados automaticamente quando não especificados:
 
 | Campo | Valor Padrão |
 |-------|--------------|
-| `version` | 1 |
 | `overlay.vxlan.dstport` | 4789 |
 | `overlay.vxlan.mtu` | 1450 |
 | `overlay.vxlan.learning` | true |

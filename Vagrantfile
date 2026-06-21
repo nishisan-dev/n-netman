@@ -210,9 +210,8 @@ overlays:
           lookup_rules:
             enabled: true
 
-# Legacy peers section (required for FDB sync)
-overlay:
-  peers:
+# Peers (v2: declared at the root level, used for FDB sync and route exchange)
+peers:
 #{peers_yaml}
 
 topology:

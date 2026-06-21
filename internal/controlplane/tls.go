@@ -42,11 +42,14 @@ func LoadServerTLSConfig(cfg *config.TLSConfig) (credentials.TransportCredential
 }
 
 // LoadClientTLSConfig creates TLS credentials for the gRPC client.
-// It configures the client to verify the server certificate using the CA,
-// and presents its own certificate for mTLS authentication.
-func LoadClientTLSConfig(cfg *config.TLSConfig) (credentials.TransportCredentials, error) {
+// It always verifies the server certificate against the configured CA (server
+// verification is never skipped) and presents its own certificate for mTLS.
+// serverName is the expected identity of the peer (its endpoint address or
+// hostname); it must appear in the peer certificate's SANs.
+func LoadClientTLSConfig(cfg *config.TLSConfig, serverName string) (credentials.TransportCredentials, error) {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
+		ServerName: serverName,
 	}
 
 	// Load client certificate if provided (for mTLS)
@@ -58,17 +61,16 @@ func LoadClientTLSConfig(cfg *config.TLSConfig) (credentials.TransportCredential
 		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 
-	// Load CA for server verification
-	if cfg.CAFile != "" {
-		caPool, err := loadCAPool(cfg.CAFile)
-		if err != nil {
-			return nil, err
-		}
-		tlsConfig.RootCAs = caPool
-	} else {
-		// No CA provided - this is insecure, only for development
-		tlsConfig.InsecureSkipVerify = true
+	// A CA is mandatory: without it we cannot authenticate the server, and
+	// silently skipping verification would defeat the purpose of enabling TLS.
+	if cfg.CAFile == "" {
+		return nil, fmt.Errorf("control_plane.tls.ca_file is required when TLS is enabled (refusing to skip server verification)")
 	}
+	caPool, err := loadCAPool(cfg.CAFile)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.RootCAs = caPool
 
 	return credentials.NewTLS(tlsConfig), nil
 }

@@ -4,6 +4,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -150,25 +151,42 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}, []string{"method"}),
 	}
 
-	// Register all metrics
-	reg.MustRegister(
-		m.ReconciliationsTotal,
-		m.ReconciliationErrors,
-		m.ReconciliationDuration,
-		m.LastReconcileTime,
-		m.VXLANsActive,
-		m.BridgesActive,
-		m.FDBEntriesTotal,
-		m.PeersConfigured,
-		m.PeersConnected,
-		m.PeersHealthy,
-		m.RoutesExported,
-		m.RoutesImported,
-		m.GRPCRequestsTotal,
-		m.GRPCRequestDuration,
-	)
+	// Register all metrics. If a collector is already registered (e.g. the
+	// constructor is called twice on the same registry), reuse the existing one
+	// so the returned struct stays wired to the registry instead of panicking.
+	m.ReconciliationsTotal = registerOrExisting(reg, m.ReconciliationsTotal)
+	m.ReconciliationErrors = registerOrExisting(reg, m.ReconciliationErrors)
+	m.ReconciliationDuration = registerOrExisting(reg, m.ReconciliationDuration)
+	m.LastReconcileTime = registerOrExisting(reg, m.LastReconcileTime)
+	m.VXLANsActive = registerOrExisting(reg, m.VXLANsActive)
+	m.BridgesActive = registerOrExisting(reg, m.BridgesActive)
+	m.FDBEntriesTotal = registerOrExisting(reg, m.FDBEntriesTotal)
+	m.PeersConfigured = registerOrExisting(reg, m.PeersConfigured)
+	m.PeersConnected = registerOrExisting(reg, m.PeersConnected)
+	m.PeersHealthy = registerOrExisting(reg, m.PeersHealthy)
+	m.RoutesExported = registerOrExisting(reg, m.RoutesExported)
+	m.RoutesImported = registerOrExisting(reg, m.RoutesImported)
+	m.GRPCRequestsTotal = registerOrExisting(reg, m.GRPCRequestsTotal)
+	m.GRPCRequestDuration = registerOrExisting(reg, m.GRPCRequestDuration)
 
 	return m
+}
+
+// registerOrExisting registers c, or returns the previously-registered collector
+// of the same type when c duplicates it, so updates remain exported. Any other
+// registration error is a programming error and panics.
+func registerOrExisting[T prometheus.Collector](reg prometheus.Registerer, c T) T {
+	if err := reg.Register(c); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			if existing, ok := already.ExistingCollector.(T); ok {
+				return existing
+			}
+			return c
+		}
+		panic(fmt.Sprintf("failed to register metric: %v", err))
+	}
+	return c
 }
 
 // Server provides HTTP endpoints for metrics and health checks.
@@ -179,10 +197,11 @@ type Server struct {
 	healthServer   *http.Server
 	statusProvider StatusProvider
 
-	mu        sync.RWMutex
-	healthy   bool
-	ready     bool
-	startTime time.Time
+	mu         sync.RWMutex
+	healthy    bool
+	ready      bool
+	healthFunc func() bool
+	startTime  time.Time
 }
 
 // NewServer creates a new observability server.
@@ -201,6 +220,15 @@ func (s *Server) SetStatusProvider(provider StatusProvider) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statusProvider = provider
+}
+
+// SetHealthFunc registers a predicate that reflects the daemon's real health
+// (e.g. the reconciler's last error). /healthz reports healthy only when both
+// the manual healthy flag and this predicate are true.
+func (s *Server) SetHealthFunc(fn func() bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.healthFunc = fn
 }
 
 // Start starts the metrics and health check servers.
@@ -232,8 +260,12 @@ func (s *Server) startMetricsServer() error {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	s.metricsServer = &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -259,8 +291,12 @@ func (s *Server) startHealthServer() error {
 	mux.HandleFunc("/status", s.handleStatus)
 
 	s.healthServer = &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -276,7 +312,13 @@ func (s *Server) startHealthServer() error {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	healthy := s.healthy
+	fn := s.healthFunc
 	s.mu.RUnlock()
+
+	// Compose the manual flag with the real-state predicate when present.
+	if fn != nil {
+		healthy = healthy && fn()
+	}
 
 	if healthy {
 		w.WriteHeader(http.StatusOK)
@@ -328,7 +370,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status.Routes = provider.GetRouteStats()
 	} else {
 		// Fallback: show configured peers with unknown status when daemon is offline.
-		for _, peer := range s.cfg.Overlay.Peers {
+		for _, peer := range s.cfg.GetPeers() {
 			status.Peers[peer.ID] = PeerStatus{
 				ID:       peer.ID,
 				Endpoint: peer.Endpoint.Address,
@@ -336,8 +378,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				Routes:   0,
 			}
 		}
-		// Count exported routes from config
-		status.Routes.Exported = len(s.cfg.Routing.Export.Networks)
+		// Count exported routes across all overlays (v1 and v2).
+		for _, o := range s.cfg.GetOverlays() {
+			status.Routes.Exported += len(o.Routing.Export.Networks)
+		}
 	}
 
 	data, err := json.Marshal(status)
@@ -383,7 +427,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("shutdown errors: %v", errs)
+		return fmt.Errorf("shutdown errors: %w", errors.Join(errs...))
 	}
 
 	return nil
