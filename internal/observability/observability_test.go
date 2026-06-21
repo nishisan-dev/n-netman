@@ -13,13 +13,19 @@ import (
 func TestNewMetrics_DoesNotPanicOnDuplicateRegistration(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	// Registering twice on the same registry must not panic.
-	_ = NewMetrics(reg)
+	first := NewMetrics(reg)
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("second NewMetrics panicked: %v", r)
 		}
 	}()
-	_ = NewMetrics(reg)
+	second := NewMetrics(reg)
+
+	// The second call must reuse the already-registered collectors so updates
+	// stay wired to the registry.
+	if first.ReconciliationsTotal != second.ReconciliationsTotal {
+		t.Fatal("expected duplicate NewMetrics to reuse the existing collector")
+	}
 }
 
 func newTestServer() *Server {

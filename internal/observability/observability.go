@@ -151,35 +151,42 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}, []string{"method"}),
 	}
 
-	// Register all metrics. Tolerate already-registered collectors (e.g. if the
-	// constructor is ever called twice) instead of panicking via MustRegister.
-	for _, c := range []prometheus.Collector{
-		m.ReconciliationsTotal,
-		m.ReconciliationErrors,
-		m.ReconciliationDuration,
-		m.LastReconcileTime,
-		m.VXLANsActive,
-		m.BridgesActive,
-		m.FDBEntriesTotal,
-		m.PeersConfigured,
-		m.PeersConnected,
-		m.PeersHealthy,
-		m.RoutesExported,
-		m.RoutesImported,
-		m.GRPCRequestsTotal,
-		m.GRPCRequestDuration,
-	} {
-		if err := reg.Register(c); err != nil {
-			var already prometheus.AlreadyRegisteredError
-			if errors.As(err, &already) {
-				continue
-			}
-			// A non-duplicate registration error is a programming error; surface it.
-			panic(fmt.Sprintf("failed to register metric: %v", err))
-		}
-	}
+	// Register all metrics. If a collector is already registered (e.g. the
+	// constructor is called twice on the same registry), reuse the existing one
+	// so the returned struct stays wired to the registry instead of panicking.
+	m.ReconciliationsTotal = registerOrExisting(reg, m.ReconciliationsTotal)
+	m.ReconciliationErrors = registerOrExisting(reg, m.ReconciliationErrors)
+	m.ReconciliationDuration = registerOrExisting(reg, m.ReconciliationDuration)
+	m.LastReconcileTime = registerOrExisting(reg, m.LastReconcileTime)
+	m.VXLANsActive = registerOrExisting(reg, m.VXLANsActive)
+	m.BridgesActive = registerOrExisting(reg, m.BridgesActive)
+	m.FDBEntriesTotal = registerOrExisting(reg, m.FDBEntriesTotal)
+	m.PeersConfigured = registerOrExisting(reg, m.PeersConfigured)
+	m.PeersConnected = registerOrExisting(reg, m.PeersConnected)
+	m.PeersHealthy = registerOrExisting(reg, m.PeersHealthy)
+	m.RoutesExported = registerOrExisting(reg, m.RoutesExported)
+	m.RoutesImported = registerOrExisting(reg, m.RoutesImported)
+	m.GRPCRequestsTotal = registerOrExisting(reg, m.GRPCRequestsTotal)
+	m.GRPCRequestDuration = registerOrExisting(reg, m.GRPCRequestDuration)
 
 	return m
+}
+
+// registerOrExisting registers c, or returns the previously-registered collector
+// of the same type when c duplicates it, so updates remain exported. Any other
+// registration error is a programming error and panics.
+func registerOrExisting[T prometheus.Collector](reg prometheus.Registerer, c T) T {
+	if err := reg.Register(c); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			if existing, ok := already.ExistingCollector.(T); ok {
+				return existing
+			}
+			return c
+		}
+		panic(fmt.Sprintf("failed to register metric: %v", err))
+	}
+	return c
 }
 
 // Server provides HTTP endpoints for metrics and health checks.
