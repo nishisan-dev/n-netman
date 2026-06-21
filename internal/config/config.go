@@ -11,6 +11,7 @@ type Config struct {
 	KVM           KVMConfig      `yaml:"kvm"`
 	Overlay       OverlayConfig  `yaml:"overlay"`  // Legado (v1)
 	Overlays      []OverlayDef   `yaml:"overlays"` // Novo (v2)
+	Peers         []PeerConfig   `yaml:"peers"`    // Novo (v2): peers no nível raiz
 	Routing       RoutingConfig  `yaml:"routing"`  // Global fallback
 	Topology      TopologyConfig `yaml:"topology"`
 	Security      SecurityConfig `yaml:"security"`
@@ -117,8 +118,8 @@ type OverlayDef struct {
 // BridgeConfig defines the bridge interface for an overlay.
 type BridgeConfig struct {
 	Name string `yaml:"name" validate:"required"`
-	IPv4 string `yaml:"ipv4,omitempty"` // CIDR format, e.g. "10.100.0.1/24"
-	IPv6 string `yaml:"ipv6,omitempty"` // CIDR format, e.g. "fd00:100::1/64"
+	IPv4 string `yaml:"ipv4,omitempty"` // CIDR format, e.g. "10.100.0.1/24" (validated in validateSemantics)
+	IPv6 string `yaml:"ipv6,omitempty"` // CIDR format, e.g. "fd00:100::1/64" (validated in validateSemantics)
 }
 
 // UnmarshalYAML implements custom unmarshaling to support both string and struct formats.
@@ -174,6 +175,9 @@ type PeerConfig struct {
 	Endpoint EndpointConfig `yaml:"endpoint" validate:"required"`
 	Auth     AuthConfig     `yaml:"auth"`
 	Health   HealthConfig   `yaml:"health"`
+	// VNIs lists the overlay VNIs this peer participates in (v2). When empty,
+	// the peer participates in all overlays (backward compatible).
+	VNIs []int `yaml:"vnis"`
 }
 
 // EndpointConfig defines the network endpoint of a peer.
@@ -302,7 +306,9 @@ type HealthcheckConfig struct {
 // Defaults returns a Config with sensible default values.
 func Defaults() *Config {
 	return &Config{
-		Version: 1,
+		// Version intentionally 0 so that an absent 'version' key fails the
+		// 'required' validation instead of being silently treated as v1.
+		Version: 0,
 		Netplan: NetplanConfig{
 			Enabled:     true,
 			ConfigPaths: []string{"/etc/netplan"},
@@ -423,8 +429,31 @@ func (c *Config) GetOverlays() []OverlayDef {
 	return nil
 }
 
-// GetPeers returns the list of peers from the legacy config.
-// In v2, peers are referenced differently, but this maintains compatibility.
+// GetPeers returns the list of peers for the active config version.
+// v2 configs declare peers at the root ('peers:'); v1 configs use the legacy
+// 'overlay.peers' block.
 func (c *Config) GetPeers() []PeerConfig {
+	if c.Version >= 2 {
+		return c.Peers
+	}
 	return c.Overlay.Peers
+}
+
+// GetPeersForVNI returns the peers that participate in the given overlay VNI.
+// A peer with no explicit VNIs participates in every overlay (backward compatible).
+func (c *Config) GetPeersForVNI(vni int) []PeerConfig {
+	var out []PeerConfig
+	for _, p := range c.GetPeers() {
+		if len(p.VNIs) == 0 {
+			out = append(out, p)
+			continue
+		}
+		for _, v := range p.VNIs {
+			if v == vni {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
 }

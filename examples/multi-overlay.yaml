@@ -76,22 +76,24 @@ overlays:
           flush_on_peer_down: true
           route_lease_seconds: 60
 
-# Peer configuration (shared across overlays)
-overlay:
-  peers:
-    - id: "peer-01"
-      endpoint:
-        address: "192.168.1.10"
-      health:
-        keepalive_interval_ms: 1500
-        dead_after_ms: 6000
+# Peer configuration (v2: declared at the root). Use 'vnis' to scope a peer to
+# specific overlays; omit it to have the peer participate in every overlay.
+peers:
+  - id: "peer-01"
+    endpoint:
+      address: "192.168.1.10"
+    vnis: [100, 200]
+    health:
+      keepalive_interval_ms: 1500
+      dead_after_ms: 6000
 
-    - id: "peer-02"
-      endpoint:
-        address: "192.168.1.11"
-      health:
-        keepalive_interval_ms: 1500
-        dead_after_ms: 6000
+  - id: "peer-02"
+    endpoint:
+      address: "192.168.1.11"
+    vnis: [100, 200]
+    health:
+      keepalive_interval_ms: 1500
+      dead_after_ms: 6000
 
 topology:
   mode: "direct-preferred"

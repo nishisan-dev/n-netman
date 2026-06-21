@@ -397,3 +397,201 @@ func TestConfig_GetOverlays_EmptyConfig(t *testing.T) {
 		t.Errorf("expected nil for empty config, got %v", overlays)
 	}
 }
+
+func TestLoader_Load_MissingVersionRejected(t *testing.T) {
+	yaml := `
+node:
+  id: "test-node"
+overlay:
+  vxlan:
+    vni: 100
+    name: "vxlan100"
+    bridge: "br-test"
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected validation error when 'version' is omitted")
+	}
+}
+
+func TestLoader_Load_DuplicateVNIRejected(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge: "br-a"
+  - vni: 100
+    name: "b"
+    bridge: "br-b"
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected error for duplicate VNI in v2")
+	}
+}
+
+func TestLoader_Load_DuplicateTableRejected(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge: "br-a"
+    routing:
+      import:
+        install:
+          table: 100
+  - vni: 200
+    name: "b"
+    bridge: "br-b"
+    routing:
+      import:
+        install:
+          table: 100
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected error for duplicate import table in v2")
+	}
+}
+
+func TestLoader_Load_V2PeersAtRoot(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge: "br-a"
+peers:
+  - id: "peer-1"
+    endpoint:
+      address: "10.0.0.2"
+    vnis: [100]
+`
+	cfg, err := NewLoader().Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	peers := cfg.GetPeers()
+	if len(peers) != 1 || peers[0].ID != "peer-1" {
+		t.Fatalf("expected root peer-1 returned by GetPeers, got %+v", peers)
+	}
+}
+
+func TestLoader_Load_V2RejectsLegacyPeers(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge: "br-a"
+overlay:
+  peers:
+    - id: "peer-1"
+      endpoint:
+        address: "10.0.0.2"
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected error: v2 must declare peers at root, not overlay.peers")
+	}
+}
+
+func TestLoader_Load_V2PeerVNIMustExist(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge: "br-a"
+peers:
+  - id: "peer-1"
+    endpoint:
+      address: "10.0.0.2"
+    vnis: [999]
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected error for peer referencing unknown VNI 999")
+	}
+}
+
+func TestLoader_Load_MulticastRequiresValidGroup(t *testing.T) {
+	base := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge: "br-a"
+    bum:
+      mode: "multicast"
+`
+	// Missing group
+	if _, err := NewLoader().Load([]byte(base)); err == nil {
+		t.Fatal("expected error: multicast mode without group")
+	}
+	// Non-multicast group
+	nonMcast := base + "      group: \"10.0.0.1\"\n"
+	if _, err := NewLoader().Load([]byte(nonMcast)); err == nil {
+		t.Fatal("expected error: non-multicast group for multicast mode")
+	}
+	// Valid multicast group
+	valid := base + "      group: \"239.1.1.100\"\n"
+	if _, err := NewLoader().Load([]byte(valid)); err != nil {
+		t.Fatalf("expected no error for valid multicast group, got: %v", err)
+	}
+}
+
+func TestLoader_Load_InvalidBridgeCIDR(t *testing.T) {
+	yaml := `
+version: 2
+node:
+  id: "test-node"
+overlays:
+  - vni: 100
+    name: "a"
+    bridge:
+      name: "br-a"
+      ipv4: "not-a-cidr"
+`
+	if _, err := NewLoader().Load([]byte(yaml)); err == nil {
+		t.Fatal("expected error for invalid bridge.ipv4 CIDR")
+	}
+}
+
+func TestLoader_ShippedExamplesAreValid(t *testing.T) {
+	// The example/config files shipped in the repo must always load and validate.
+	for _, p := range []string{"../../n-netman.yml", "../../examples/multi-overlay.yaml"} {
+		if _, err := NewLoader().LoadFile(p); err != nil {
+			t.Errorf("shipped config %s failed to load: %v", p, err)
+		}
+	}
+}
+
+func TestConfig_GetPeersForVNI(t *testing.T) {
+	cfg := &Config{
+		Version: 2,
+		Peers: []PeerConfig{
+			{ID: "all"}, // no VNIs -> all overlays
+			{ID: "only-100", VNIs: []int{100}},
+			{ID: "only-200", VNIs: []int{200}},
+		},
+	}
+
+	for100 := cfg.GetPeersForVNI(100)
+	if len(for100) != 2 {
+		t.Fatalf("expected 2 peers for VNI 100 (all + only-100), got %d", len(for100))
+	}
+	for200 := cfg.GetPeersForVNI(200)
+	if len(for200) != 2 {
+		t.Fatalf("expected 2 peers for VNI 200 (all + only-200), got %d", len(for200))
+	}
+}
