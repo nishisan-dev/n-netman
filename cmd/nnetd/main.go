@@ -471,24 +471,37 @@ func distinctImportTables(cfg *config.Config) []int {
 }
 
 // deleteRoutesFromKernel removes the given routes from their per-VNI tables,
-// scoped to the n-netman protocol so foreign routes are never touched.
+// scoped to the n-netman protocol AND to the exact next-hop the peer installed.
+// Scoping by next-hop matters because the in-memory table keeps one entry per
+// (VNI, prefix, peer) while the kernel keeps a single route per (dst, table):
+// without it, peer A withdrawing a prefix could delete peer B's active route
+// for the same prefix/table.
 func deleteRoutesFromKernel(cfg *config.Config, routeMgr *nlmgr.RouteManager, routes []controlplane.Route, logger *slog.Logger, reason string) {
 	for _, r := range routes {
 		_, ipnet, err := net.ParseCIDR(r.Prefix)
 		if err != nil {
 			continue
 		}
+		gw := net.ParseIP(r.NextHop)
+		if gw == nil {
+			// Without a valid next-hop we cannot scope the deletion safely; skip
+			// (such a route was never installed by installReceivedRoutes anyway).
+			logger.Debug("skipping route deletion without a valid next-hop",
+				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID)
+			continue
+		}
 		table := tableForVNI(cfg, r.VNI)
 		if err := routeMgr.Delete(nlmgr.RouteConfig{
 			Destination: ipnet,
+			Gateway:     gw,
 			Table:       table,
 			Protocol:    nlmgr.RouteProtocolNNetMan,
 		}); err != nil {
 			logger.Warn("failed to delete route",
-				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID, "table", table, "error", err)
+				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID, "next_hop", r.NextHop, "table", table, "error", err)
 		} else {
 			logger.Info("removed route",
-				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID, "table", table)
+				"reason", reason, "prefix", r.Prefix, "peer", r.PeerID, "next_hop", r.NextHop, "table", table)
 		}
 	}
 }
