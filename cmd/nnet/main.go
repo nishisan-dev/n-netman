@@ -95,7 +95,7 @@ It creates/updates VXLAN interfaces, bridges, and FDB entries as needed.`,
 			fmt.Printf("   Config Version: %d\n", cfg.Version)
 			fmt.Printf("   Overlays: %d\n", len(overlays))
 			for _, o := range overlays {
-				fmt.Printf("     • VNI %d: %s (bridge: %s)\n", o.VNI, o.Name, o.Bridge)
+				fmt.Printf("     • VNI %d: %s (bridge: %s)\n", o.VNI, o.Name, o.Bridge.Name)
 			}
 			fmt.Printf("   Peers: %d\n\n", len(peers))
 
@@ -103,7 +103,7 @@ It creates/updates VXLAN interfaces, bridges, and FDB entries as needed.`,
 				fmt.Println("🔍 Dry-run mode - no changes will be made")
 				fmt.Println("\nWould perform:")
 				for _, o := range overlays {
-					fmt.Printf("  • Create bridge: %s\n", o.Bridge)
+					fmt.Printf("  • Create bridge: %s\n", o.Bridge.Name)
 					fmt.Printf("  • Create VXLAN: %s (VNI %d)\n", o.Name, o.VNI)
 				}
 				for _, peer := range peers {

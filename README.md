@@ -15,27 +15,28 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ Sincronização de FDB para peers configurados (flooding BUM)
 - ✅ BUM em head-end-replication (FDB) e multicast (grupo IP)
 - ✅ **Troca de rotas via gRPC** (ExchangeState, AnnounceRoutes, WithdrawRoutes)
-- ✅ Instalação automática de rotas recebidas no kernel
-- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`, `version`
-- ✅ Carregamento/validação de config YAML com defaults
-- ✅ Healthchecks HTTP e endpoint de métricas
+- ✅ Instalação automática de rotas recebidas no kernel (server e client)
+- ✅ **Políticas de import aplicadas** (`allow`/`deny`/`accept_all`) — default seguro (nega)
+- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`, `cert`, `libvirt`, `version`
+- ✅ Carregamento/validação de config YAML (`version` obrigatória, duplicatas detectadas)
+- ✅ Healthchecks HTTP e métricas Prometheus populadas em runtime
 - ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
 - ✅ **Estatísticas de rotas** (exported, installed, per-peer)
-- ✅ **Cleanup automático** de rotas no shutdown e quando peers caem (`flush_on_peer_down`)
-- ✅ **Multi-Overlay (v2)** — Múltiplos VXLANs com routing independente por overlay
+- ✅ **Cleanup automático** de rotas no shutdown (multi-tabela) e quando peers caem (`flush_on_peer_down`)
+- ✅ **Multi-Overlay (v2)** — Múltiplos VXLANs com routing independente e peers por overlay (`vnis`)
 - ✅ Bridge com IPv4/IPv6 por overlay (para nexthop e anúncios)
-- ✅ **TLS/mTLS** para comunicação gRPC entre peers
+- ✅ **TLS/mTLS** — CA obrigatória, verificação do servidor e identidade do peer pelo certificado
 - ✅ **Policy-Based Routing** — Rotas instaladas em tabelas específicas por VNI
 - ✅ **Integração libvirt** — Attach/detach de VMs via `nnet libvirt`
 
 ### Em progresso
 
 - ⚠️ Netplan parsing e rotas conectadas/estáticas
-- ⚠️ Políticas de import/export (`allow/deny`, `include_connected`, `include_netplan_static`)
 
 ### Ainda não funciona (resumo rápido)
 
-- ❌ Políticas avançadas de import/export (`allow/deny/accept_all`, `export_all`)
+- ❌ Export estendido (`export_all`, `include_connected`, `include_netplan_static`) — export usa só `networks`
+- ❌ `lookup_rules.mode: prefix` (apenas `interface` implementado)
 - ❌ Validação de PSK entre peers
 
 ---
@@ -705,21 +706,22 @@ Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implem
 |------|--------|-----------|
 | **Validação de PSK** | ❌ | Chaves PSK são lidas mas não validadas |
 | **Netplan parsing** | ❌ | Rotas do netplan não são lidas automaticamente |
-| **Políticas de import/export** | ❌ | `allow/deny`, `include_connected`, `include_netplan_static` ainda não são aplicados |
+| **Export estendido** | ❌ | `export_all`/`include_connected`/`include_netplan_static` ignorados (export usa só `networks`) |
 
 ### Funcional
 | Item | Status | Descrição |
 |------|--------|-----------|
-| **VXLAN/Bridge** | ✅ | Criação funciona (requer root) |
-| **FDB entries** | ✅ | Sincronização de peers funciona |
-| **Troca de rotas gRPC** | ✅ | Handlers implementados, rotas instaladas |
-| **TLS/mTLS** | ✅ | Comunicação gRPC criptografada entre peers |
-| **Multi-Overlay** | ✅ | VNI-aware routing com tabelas independentes por overlay |
-| **Reconciler** | ✅ | Loop funciona |
-| **Métricas** | ✅ | Servidor Prometheus ativo e métricas coletadas |
-| **Healthcheck** | ✅ | Endpoints funcionam |
-| **Status de peers** | ✅ | Health check implementado com keepalive |
-| **Integração libvirt** | ✅ | CLI `nnet libvirt` para attach/detach de VMs |
+| **VXLAN/Bridge** | ✅ | Criação/reconciliação idempotente (requer root) |
+| **FDB entries** | ✅ | Sincronização de peers BUM por overlay (escopo por VNI) |
+| **Troca de rotas gRPC** | ✅ | Handlers implementados, rotas instaladas e retiradas do kernel |
+| **Políticas de import** | ✅ | `allow`/`deny`/`accept_all` aplicadas no daemon (default nega) |
+| **TLS/mTLS** | ✅ | CA obrigatória, verificação do servidor e identidade do peer pelo CN do certificado |
+| **Multi-Overlay** | ✅ | VNI-aware routing com tabelas e peers independentes por overlay |
+| **Reconciler** | ✅ | Loop funciona; erro em um overlay não aborta os demais |
+| **Métricas** | ✅ | Servidor Prometheus ativo e métricas populadas em runtime |
+| **Healthcheck** | ✅ | Endpoints funcionam; `/healthz` reflete o estado do reconciler |
+| **Status de peers** | ✅ | Health check via ExchangeState (healthy/unhealthy/disconnected) |
+| **Integração libvirt** | ✅ | CLI `nnet libvirt` para attach/detach de VMs (mesmo desligadas) |
 
 ### Próximas Prioridades
 1. Testes de integração com VMs reais em lab

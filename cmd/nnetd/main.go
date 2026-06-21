@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,27 @@ var (
 	buildDate = "unknown"
 )
 
+// newLogger builds a slog logger honoring the configured level and format.
+func newLogger(level, format string) *slog.Logger {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: lvl}
+	if strings.ToLower(format) == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+}
+
 func main() {
 	// Parse flags
 	configPath := flag.String("config", "/etc/n-netman/n-netman.yaml", "Path to configuration file")
@@ -39,11 +61,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Setup structured logging
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// Bootstrap logging (used for config-load errors before config is available).
+	slog.SetDefault(newLogger("info", "json"))
 
 	slog.Info("starting n-netman daemon",
 		"version", version,
@@ -57,6 +76,10 @@ func main() {
 		slog.Error("failed to load configuration", "error", err)
 		os.Exit(1)
 	}
+
+	// Reconfigure logging from the loaded config (level + format).
+	logger := newLogger(cfg.Observability.Logging.Level, cfg.Observability.Logging.Format)
+	slog.SetDefault(logger)
 
 	overlays := cfg.GetOverlays()
 	peers := cfg.GetPeers()

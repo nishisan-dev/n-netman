@@ -19,25 +19,27 @@ O nó anuncia rotas para seus peers conforme configuração:
 ```yaml
 routing:
   export:
-    export_all: false           # Se true, exporta todas as rotas do sistema
-    networks:                   # Redes explícitas a exportar
+    export_all: false           # Reservado — NÃO implementado (ignorado)
+    networks:                   # Redes explícitas a exportar (única fonte hoje)
       - "172.16.10.0/24"
       - "2001:db8:10::/64"
-    include_connected: true     # Rotas diretamente conectadas
-    include_netplan_static: true  # Rotas estáticas do netplan (futuro)
+    include_connected: true     # Reservado — NÃO implementado (ignorado)
+    include_netplan_static: true  # Reservado — NÃO implementado (ignorado)
     metric: 100                 # Métrica aplicada às rotas anunciadas
 ```
 
-### export_all vs Redes Explícitas
+### Fonte das Rotas Exportadas
 
-| Configuração | Comportamento |
-|--------------|---------------|
-| `export_all: true` | Exporta todas as rotas da tabela main do kernel |
-| `export_all: false` + `networks: [...]` | Exporta apenas os prefixos listados |
-| `include_connected: true` | Adiciona rotas conectadas (interfaces com IP) |
-| `include_netplan_static: true` | Adiciona rotas estáticas lidas do netplan |
+Atualmente o export usa **apenas** a lista explícita `networks`. Os campos abaixo são reservados e **ainda não implementados** (são ignorados pelo daemon):
 
-**Recomendação:** Use `export_all: false` com lista explícita de `networks`. Isso evita vazamento acidental de rotas internas.
+| Configuração | Status | Comportamento pretendido |
+|--------------|--------|--------------------------|
+| `networks: [...]` | Implementado | Exporta os prefixos listados |
+| `export_all: true` | NÃO implementado | (futuro) Exportaria todas as rotas da tabela main |
+| `include_connected: true` | NÃO implementado | (futuro) Adicionaria rotas conectadas |
+| `include_netplan_static: true` | NÃO implementado | (futuro) Adicionaria rotas estáticas do netplan |
+
+**Recomendação:** Declare explicitamente os prefixos em `networks`. Isso evita vazamento acidental de rotas internas.
 
 ### Métricas
 
@@ -74,11 +76,13 @@ routing:
 
 ### Ordem de Avaliação
 
+A política de import **é aplicada** pelo daemon ao instalar as rotas recebidas de peers (cada overlay v2 usa a sua própria política `import`). A avaliação segue esta ordem:
+
 1. Rota chega de um peer
-2. Se `accept_all: true`, aceita imediatamente
-3. Senão, verifica se prefixo está em `deny` → rejeita
-4. Verifica se prefixo está em `allow` → aceita
-5. Se não está em nenhum → rejeita (default deny)
+2. **`deny` primeiro (precedência) — casa por SOBREPOSIÇÃO:** se o prefixo anunciado sobrepõe qualquer prefixo de `deny`, a rota é **rejeitada**. A sobreposição é bidirecional: uma rota anunciada **mais ampla** que engloba um prefixo negado também é negada (ex.: anunciar `0.0.0.0/0` é negado por um `deny: ["10.0.0.0/8"]`).
+3. Se `accept_all: true` → aceita (tudo que não foi negado acima)
+4. **`allow` — casa por CONTENÇÃO:** a rota só é aceita se estiver **contida** (for um subconjunto de) algum prefixo de `allow`. Uma rota mais ampla que o prefixo permitido **não** é aceita.
+5. Se não casou em nenhum `allow` (e sem `accept_all`) → **rejeita** (default seguro: deny)
 
 ### Leases e Remoção de Rotas
 
@@ -121,6 +125,10 @@ ip rule show
 ```
 
 Isso é essencial para multi-overlay: cada overlay tem sua própria tabela e suas próprias regras.
+
+A prioridade das regras é **fixa no código** (não configurável): a regra `iif` usa prioridade `100` e a regra `oif` usa `101`.
+
+**`lookup_rules.mode`:** apenas o modo `interface` (padrão) está implementado — cria regras `iif`/`oif` por bridge, como mostrado acima. O modo `prefix` ainda **NÃO** é implementado.
 
 **Sem lookup_rules:** O kernel consulta apenas a `table main`, ignorando rotas em tabelas customizadas.
 

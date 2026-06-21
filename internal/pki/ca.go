@@ -21,9 +21,13 @@ func GenerateCA(outputDir string, validityDays int) error {
 		return fmt.Errorf("failed to generate private key: %w", err)
 	}
 
-	// 2. Create Certificate template
+	// 2. Create Certificate template with a random serial number.
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return fmt.Errorf("failed to generate serial number: %w", err)
+	}
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"n-netman"},
 			CommonName:   "n-netman-ca",
@@ -42,8 +46,8 @@ func GenerateCA(outputDir string, validityDays int) error {
 		return fmt.Errorf("failed to create certificate: %w", err)
 	}
 
-	// 4. Save to files
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	// 4. Save to files. The directory holds private keys, so keep it owner-only.
+	if err := os.MkdirAll(outputDir, 0700); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
