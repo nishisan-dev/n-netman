@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/net/ipv4"
@@ -41,13 +42,15 @@ type RejectHandler func(reason string, err error)
 
 // Listener receives advertisements on one interface.
 //
-// One Listener owns one socket and is driven by a single Run goroutine; it is
-// not safe to call Run concurrently on the same Listener.
+// A Listener is driven by a single Run goroutine, but Close is reached
+// concurrently — from the goroutine that unblocks the read on shutdown as well
+// as from Run itself — so the socket is guarded.
 type Listener struct {
 	cfg      ListenerConfig
 	logger   *slog.Logger
 	onReject RejectHandler
 
+	mu   sync.Mutex
 	raw  net.PacketConn
 	conn *ipv4.PacketConn
 }
@@ -91,7 +94,8 @@ func NewListener(cfg ListenerConfig, opts ...ListenerOption) (*Listener, error) 
 // must not be fatal.
 func (l *Listener) Run(ctx context.Context, guard *ReplayGuard, handle Handler) error {
 	for {
-		if err := l.open(); err != nil {
+		conn, err := l.open()
+		if err != nil {
 			l.logger.Warn("waiting to join the inject group",
 				"interface", l.cfg.Interface, "group", l.cfg.Group, "error", err)
 			select {
@@ -105,7 +109,7 @@ func (l *Listener) Run(ctx context.Context, guard *ReplayGuard, handle Handler) 
 		l.logger.Info("listening for inject advertisements",
 			"interface", l.cfg.Interface, "group", l.cfg.Group, "port", l.cfg.Port)
 
-		err := l.receive(ctx, guard, handle)
+		err = l.receive(ctx, conn, guard, handle)
 		l.Close()
 
 		if ctx.Err() != nil {
@@ -123,7 +127,9 @@ func (l *Listener) Run(ctx context.Context, guard *ReplayGuard, handle Handler) 
 	}
 }
 
-func (l *Listener) receive(ctx context.Context, guard *ReplayGuard, handle Handler) error {
+// receive reads from the connection it is given rather than from the field, so
+// a concurrent Close cannot pull the socket out from under the read.
+func (l *Listener) receive(ctx context.Context, conn *ipv4.PacketConn, guard *ReplayGuard, handle Handler) error {
 	// Closing the socket is what unblocks the read on shutdown.
 	done := make(chan struct{})
 	defer close(done)
@@ -137,7 +143,7 @@ func (l *Listener) receive(ctx context.Context, guard *ReplayGuard, handle Handl
 
 	buf := make([]byte, readBufferSize)
 	for {
-		n, _, _, err := l.conn.ReadFrom(buf)
+		n, _, _, err := conn.ReadFrom(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -169,8 +175,12 @@ func (l *Listener) receive(ctx context.Context, guard *ReplayGuard, handle Handl
 	}
 }
 
-// Close releases the socket. It is safe to call more than once.
+// Close releases the socket. It is safe to call more than once, and from more
+// than one goroutine.
 func (l *Listener) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if l.raw == nil {
 		return nil
 	}
@@ -180,38 +190,39 @@ func (l *Listener) Close() error {
 	return err
 }
 
-func (l *Listener) open() error {
-	if l.raw != nil {
-		return nil
-	}
-
+// open builds the socket and returns it, so the caller reads from a local
+// reference instead of racing Close for the field.
+func (l *Listener) open() (*ipv4.PacketConn, error) {
 	iface, err := net.InterfaceByName(l.cfg.Interface)
 	if err != nil {
-		return fmt.Errorf("interface %s not found: %w", l.cfg.Interface, err)
+		return nil, fmt.Errorf("interface %s not found: %w", l.cfg.Interface, err)
 	}
 
 	// Binding to the group address makes the kernel deliver only datagrams for
 	// that group, so segments sharing a port stay separated.
 	raw, err := net.ListenPacket("udp4", fmt.Sprintf("%s:%d", l.cfg.Group, l.cfg.Port))
 	if err != nil {
-		return fmt.Errorf("failed to bind %s:%d: %w", l.cfg.Group, l.cfg.Port, err)
+		return nil, fmt.Errorf("failed to bind %s:%d: %w", l.cfg.Group, l.cfg.Port, err)
 	}
 
 	conn := ipv4.NewPacketConn(raw)
 	if err := conn.JoinGroup(iface, &net.UDPAddr{IP: l.cfg.Group}); err != nil {
 		raw.Close()
-		return fmt.Errorf("failed to join %s on %s: %w", l.cfg.Group, l.cfg.Interface, err)
+		return nil, fmt.Errorf("failed to join %s on %s: %w", l.cfg.Group, l.cfg.Interface, err)
 	}
 	// Membership is per interface, so an agent with several NICs never picks up
 	// a neighbouring segment's advertisements by accident.
 	if err := conn.SetMulticastInterface(iface); err != nil {
 		raw.Close()
-		return fmt.Errorf("failed to pin the group to %s: %w", l.cfg.Interface, err)
+		return nil, fmt.Errorf("failed to pin the group to %s: %w", l.cfg.Interface, err)
 	}
 
+	l.mu.Lock()
 	l.raw = raw
 	l.conn = conn
-	return nil
+	l.mu.Unlock()
+
+	return conn, nil
 }
 
 func (l *Listener) reject(reason string, err error) {
