@@ -197,6 +197,14 @@ func main() {
 		}
 	}()
 
+	// Start the inject publishers (route advertisement to VMs on tagged bridges).
+	injectPublishers, err := startInjectPublishers(ctx, cfg, routeTable, metrics, logger)
+	if err != nil {
+		slog.Error("failed to start inject publishers", "error", err)
+		os.Exit(1)
+	}
+	defer stopInjectPublishers(injectPublishers, logger)
+
 	// Mark as ready
 	obsServer.SetReady(true)
 
@@ -218,6 +226,10 @@ func main() {
 	obsServer.SetHealthy(false)
 	cpServer.Stop()
 	cpClient.Disconnect()
+
+	// Stop advertising before flushing, so agents stop refreshing their leases
+	// at the same moment this host stops carrying their traffic.
+	stopInjectPublishers(injectPublishers, logger)
 
 	// Cleanup: flush all routes installed by n-netman across every table used by
 	// the overlays (multi-overlay configs install into per-overlay tables).
