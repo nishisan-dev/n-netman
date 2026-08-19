@@ -281,6 +281,35 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// StartHTTP starts an HTTP server with the timeout policy every listener in the
+// project shares, and logs its lifecycle.
+//
+// It is exported so nnet-agent can expose the same endpoints without depending
+// on the controller's configuration schema.
+func StartHTTP(name, addr string, handler http.Handler, logger *slog.Logger) *http.Server {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	go func() {
+		logger.Info(name+" server started", "address", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error(name+" server error", "error", err)
+		}
+	}()
+
+	return srv
+}
+
+// MetricsHandler returns the Prometheus handler, so callers do not need to
+// import promhttp directly.
+func MetricsHandler() http.Handler { return promhttp.Handler() }
+
 func (s *Server) startMetricsServer() error {
 	addr := fmt.Sprintf("%s:%d",
 		s.cfg.Observability.Metrics.Listen.Address,
@@ -290,21 +319,7 @@ func (s *Server) startMetricsServer() error {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 
-	s.metricsServer = &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	go func() {
-		s.logger.Info("metrics server started", "address", addr)
-		if err := s.metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("metrics server error", "error", err)
-		}
-	}()
+	s.metricsServer = StartHTTP("metrics", addr, mux, s.logger)
 
 	return nil
 }
@@ -321,21 +336,7 @@ func (s *Server) startHealthServer() error {
 	mux.HandleFunc("/livez", s.handleLive)
 	mux.HandleFunc("/status", s.handleStatus)
 
-	s.healthServer = &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	go func() {
-		s.logger.Info("health server started", "address", addr)
-		if err := s.healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("health server error", "error", err)
-		}
-	}()
+	s.healthServer = StartHTTP("health", addr, mux, s.logger)
 
 	return nil
 }
