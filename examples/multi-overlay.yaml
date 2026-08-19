@@ -40,6 +40,9 @@ overlays:
           - "2001:db8:10::/64"
         include_connected: true
         metric: 100
+        # Communities attached to every exported route. inject rules filter on
+        # these via route_tags.
+        tags: ["it"]
       import:
         accept_all: false
         allow:

@@ -363,6 +363,7 @@ func getLocalExportableRoutes(cfg *config.Config, routeTable *controlplane.Route
 				NextHop:      nextHop,
 				Metric:       metric,
 				LeaseSeconds: leaseSecs,
+				Tags:         overlay.Routing.Export.Tags,
 				VNI:          uint32(overlay.VNI),
 			})
 		}

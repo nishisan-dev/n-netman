@@ -941,3 +941,22 @@ func TestInjectConfig_Defaults(t *testing.T) {
 		t.Errorf("expected interval %ds, got %s", DefaultInjectInterval, got)
 	}
 }
+
+// Export communities are what routing.inject rules filter on via route_tags,
+// so they must survive loading.
+func TestLoader_Load_ExportTags(t *testing.T) {
+	yaml := injectBase + `
+    routing:
+      export:
+        networks: ["172.16.10.0/24"]
+        tags: ["it", "prod"]
+`
+	cfg, err := NewLoader().Load([]byte(yaml))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	tags := cfg.Overlays[0].Routing.Export.Tags
+	if len(tags) != 2 || tags[0] != "it" || tags[1] != "prod" {
+		t.Fatalf("expected export tags [it prod], got %v", tags)
+	}
+}

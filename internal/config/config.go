@@ -218,6 +218,10 @@ type ExportConfig struct {
 	IncludeConnected     bool     `yaml:"include_connected"`
 	IncludeNetplanStatic bool     `yaml:"include_netplan_static"`
 	Metric               int      `yaml:"metric"`
+	// Tags are communities attached to every route exported by this overlay.
+	// They travel with the route to peers and are what routing.inject rules
+	// filter on via route_tags.
+	Tags []string `yaml:"tags,omitempty"`
 }
 
 // ImportConfig defines which routes this node accepts.
