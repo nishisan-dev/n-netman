@@ -25,9 +25,18 @@ type RouteConfig struct {
 	Protocol    int        // Protocol that added route (for identification)
 }
 
-// Protocol constants for route identification
+// Protocol constants for route identification.
+//
+// Every route the project installs carries one of these, so deletions can be
+// scoped to routes we own and never touch a route someone else installed.
 const (
-	RouteProtocolNNetMan = 99 // Custom protocol ID for n-netman routes
+	// RouteProtocolNNetMan marks routes the controller installs on a host from
+	// prefixes learned over the gRPC control plane.
+	RouteProtocolNNetMan = 99
+	// RouteProtocolNNetAgent marks routes nnet-agent installs inside a VM from
+	// advertisements received on the inject channel. It is distinct from
+	// RouteProtocolNNetMan so the two remain separable on a host that runs both.
+	RouteProtocolNNetAgent = 98
 )
 
 // Add adds a route to the routing table.
