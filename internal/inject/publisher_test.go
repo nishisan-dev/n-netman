@@ -1,6 +1,7 @@
 package inject
 
 import (
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -335,5 +336,28 @@ func TestTagsIntersect(t *testing.T) {
 				t.Fatalf("tagsIntersect(%v, %v) = %v, want %v", tc.have, tc.want, got, tc.out)
 			}
 		})
+	}
+}
+
+func TestNewMulticastTransport_Validation(t *testing.T) {
+	if _, err := NewMulticastTransport("", net.ParseIP("239.8.0.100"), 4790); err == nil {
+		t.Fatal("expected an error for an empty interface name")
+	}
+	if _, err := NewMulticastTransport("br-prod", net.ParseIP("10.0.0.1"), 4790); err == nil {
+		t.Fatal("expected an error for a non-multicast group")
+	}
+}
+
+// The socket must not be opened at construction: the bridge is created by the
+// reconciler and may not exist yet when the publisher is built.
+func TestNewMulticastTransport_DoesNotTouchTheInterfaceUntilSend(t *testing.T) {
+	transport, err := NewMulticastTransport("nnet-absent-iface", net.ParseIP("239.8.0.100"), 4790)
+	if err != nil {
+		t.Fatalf("expected construction to succeed for an absent interface, got: %v", err)
+	}
+	defer transport.Close()
+
+	if err := transport.Send([]byte("x")); err == nil {
+		t.Fatal("expected Send to report the missing interface")
 	}
 }

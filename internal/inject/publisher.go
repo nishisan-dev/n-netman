@@ -382,53 +382,108 @@ func tagsIntersect(have, want []string) bool {
 }
 
 // multicastTransport sends datagrams out one bridge.
+//
+// The socket is opened on first use rather than at construction: the bridge is
+// created by the reconciler, which may not have run its first cycle when the
+// publisher is built. Opening lazily also lets the transport recover on its own
+// if the bridge is torn down and recreated.
+//
+// multicastTransport is safe for concurrent use.
 type multicastTransport struct {
-	conn *ipv4.PacketConn
+	ifname string
+	group  net.IP
+	port   int
+
+	mu   sync.Mutex
 	raw  net.PacketConn
+	conn *ipv4.PacketConn
 	dst  *net.UDPAddr
 }
 
-// NewMulticastTransport binds a sender to a specific interface.
+// NewMulticastTransport describes a sender bound to a specific interface.
 //
 // TTL is pinned to 1 so an advertisement never leaves the L2 segment, and
 // loopback is disabled because the publisher is not its own audience.
 func NewMulticastTransport(ifname string, group net.IP, port int) (Transport, error) {
-	iface, err := net.InterfaceByName(ifname)
-	if err != nil {
-		return nil, fmt.Errorf("interface %s not found: %w", ifname, err)
+	if ifname == "" {
+		return nil, fmt.Errorf("multicast transport: no interface")
 	}
-
-	raw, err := net.ListenPacket("udp4", "0.0.0.0:0")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open multicast socket: %w", err)
+	if group == nil || !group.IsMulticast() {
+		return nil, fmt.Errorf("multicast transport: %v is not a multicast group", group)
 	}
-
-	conn := ipv4.NewPacketConn(raw)
-	if err := conn.SetMulticastInterface(iface); err != nil {
-		raw.Close()
-		return nil, fmt.Errorf("failed to bind multicast sender to %s: %w", ifname, err)
-	}
-	if err := conn.SetMulticastTTL(1); err != nil {
-		raw.Close()
-		return nil, fmt.Errorf("failed to set multicast TTL: %w", err)
-	}
-	if err := conn.SetMulticastLoopback(false); err != nil {
-		raw.Close()
-		return nil, fmt.Errorf("failed to disable multicast loopback: %w", err)
-	}
-
 	return &multicastTransport{
-		conn: conn,
-		raw:  raw,
-		dst:  &net.UDPAddr{IP: group, Port: port},
+		ifname: ifname,
+		group:  group,
+		port:   port,
+		dst:    &net.UDPAddr{IP: group, Port: port},
 	}, nil
 }
 
 func (t *multicastTransport) Send(datagram []byte) error {
-	if _, err := t.raw.WriteTo(datagram, t.dst); err != nil {
-		return fmt.Errorf("failed to write to %s: %w", t.dst, err)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if err := t.openLocked(); err != nil {
+		return err
 	}
+
+	if _, err := t.raw.WriteTo(datagram, t.dst); err != nil {
+		// Drop the socket so the next cycle rebuilds it; a bridge that was
+		// recreated leaves the old socket bound to an index that no longer
+		// exists.
+		t.closeLocked()
+		return fmt.Errorf("failed to write to %s on %s: %w", t.dst, t.ifname, err)
+	}
+
 	return nil
 }
 
-func (t *multicastTransport) Close() error { return t.raw.Close() }
+func (t *multicastTransport) openLocked() error {
+	if t.raw != nil {
+		return nil
+	}
+
+	iface, err := net.InterfaceByName(t.ifname)
+	if err != nil {
+		return fmt.Errorf("interface %s not found: %w", t.ifname, err)
+	}
+
+	raw, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	if err != nil {
+		return fmt.Errorf("failed to open multicast socket: %w", err)
+	}
+
+	conn := ipv4.NewPacketConn(raw)
+	for _, step := range []struct {
+		what string
+		fn   func() error
+	}{
+		{"bind to " + t.ifname, func() error { return conn.SetMulticastInterface(iface) }},
+		{"set TTL", func() error { return conn.SetMulticastTTL(1) }},
+		{"disable loopback", func() error { return conn.SetMulticastLoopback(false) }},
+	} {
+		if err := step.fn(); err != nil {
+			raw.Close()
+			return fmt.Errorf("failed to %s: %w", step.what, err)
+		}
+	}
+
+	t.raw = raw
+	t.conn = conn
+	return nil
+}
+
+func (t *multicastTransport) closeLocked() {
+	if t.raw != nil {
+		t.raw.Close()
+		t.raw = nil
+		t.conn = nil
+	}
+}
+
+func (t *multicastTransport) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closeLocked()
+	return nil
+}
