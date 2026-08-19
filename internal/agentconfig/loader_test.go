@@ -206,3 +206,19 @@ func TestImportPolicy_Policy(t *testing.T) {
 		t.Fatal("deny must beat accept_all")
 	}
 }
+
+// The example shipped in the repo must always load and validate, mirroring the
+// controller's TestLoader_ShippedExamplesAreValid.
+func TestLoader_ShippedExampleIsValid(t *testing.T) {
+	cfg, err := NewLoader().LoadFile("../../examples/agent.yaml")
+	if err != nil {
+		t.Fatalf("shipped agent example failed to load: %v", err)
+	}
+	group, err := cfg.GroupFor(cfg.Interfaces[0])
+	if err != nil {
+		t.Fatalf("GroupFor: %v", err)
+	}
+	if group.String() != "239.8.0.100" {
+		t.Fatalf("expected the example to resolve to 239.8.0.100, got %s", group)
+	}
+}

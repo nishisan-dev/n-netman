@@ -1,0 +1,69 @@
+# nnet-agent configuration (runs inside a VM)
+#
+# The agent starts after netplan, applies the static address below, and
+# installs the routes the controller advertises on the segment's multicast
+# group. See docs/agent.md.
+
+version: 1
+
+agent:
+  id: "vm-app-01"
+
+# Channel defaults. These must match the controller's routing.inject block.
+inject:
+  group_base: "239.8.0.0"   # default; the VNI is OR-ed into the last two octets
+  port: 4790                # default
+
+interfaces:
+  - name: "ens3"
+
+    # Phase 1 is static addressing: the agent applies this address itself.
+    address: "10.100.0.50/24"
+
+    # Identifies the segment. With the default base, VNI 100 listens on
+    # 239.8.0.100. Use 'group:' instead to pin an address explicitly.
+    vni: 100
+
+    # Guards against a NIC cabled to the wrong segment: an advertisement is
+    # only accepted when the segment carries every tag listed here.
+    expect_tags: ["it"]
+
+    # Same "file:/path" convention as the controller. The file must not be
+    # group or world readable.
+    psk_ref: "file:/etc/n-netman/psk/inject.key"
+
+    # Optional: pin which key ids are accepted during a key rotation.
+    # key_ids: ["k1"]
+
+    install:
+      # 0 (or omitted) means the main table, so ordinary VM traffic uses the
+      # routes without any policy rule.
+      table: 0
+      metric: 100
+      # Opt-in. Left off, an advertised default gateway is ignored, so an
+      # advertisement cannot take over the default route netplan configured.
+      accept_default_gateway: false
+
+    # Governs which advertised prefixes are installed. Deny wins over allow,
+    # and anything not allowed is rejected. Note this does not apply to the
+    # default route, which accept_default_gateway governs on its own.
+    import:
+      accept_all: false
+      allow:
+        - "172.16.0.0/16"
+      deny: []
+
+observability:
+  logging:
+    level: "info"
+    format: "json"
+  metrics:
+    enabled: true
+    listen:
+      address: "127.0.0.1"
+      port: 9111
+  healthcheck:
+    enabled: true
+    listen:
+      address: "127.0.0.1"
+      port: 9112

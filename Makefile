@@ -11,10 +11,11 @@ GOBIN ?= $(shell go env GOPATH)/bin
 
 all: build
 
-## build: Build daemon and CLI binaries
+## build: Build daemon, CLI and VM agent binaries
 build:
 	go build $(LDFLAGS) -o bin/nnetd ./cmd/nnetd
 	go build $(LDFLAGS) -o bin/nnet ./cmd/nnet
+	go build $(LDFLAGS) -o bin/nnet-agent ./cmd/nnet-agent
 
 ## test: Run unit tests
 test:
@@ -57,6 +58,7 @@ proto:
 install: build
 	cp bin/nnetd $(GOBIN)/
 	cp bin/nnet $(GOBIN)/
+	cp bin/nnet-agent $(GOBIN)/
 
 ## clean: Remove build artifacts
 clean:

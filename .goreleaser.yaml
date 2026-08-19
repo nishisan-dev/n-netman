@@ -26,8 +26,21 @@ builds:
       - -X main.commit={{.ShortCommit}}
       - -X main.buildDate={{.Date}}
 
+  - id: nnet-agent
+    main: ./cmd/nnet-agent
+    binary: nnet-agent
+    goos: [linux]
+    goarch: [amd64]
+    env: [CGO_ENABLED=0]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.buildDate={{.Date}}
+
 archives:
   - id: default
+    ids: [nnetd, nnet]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -35,8 +48,19 @@ archives:
       - README.md
       - n-netman.yml
 
+  - id: agent
+    ids: [nnet-agent]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - examples/agent.yaml
+
 nfpms:
   - id: deb
+    # Without this the controller package would also ship nnet-agent, putting a
+    # VM daemon on every hypervisor.
+    ids: [nnetd, nnet]
     package_name: n-netman
     vendor: Nishisan Dev
     homepage: https://github.com/nishisan-dev/n-netman
@@ -70,6 +94,40 @@ nfpms:
 
     scripts:
       postinstall: packaging/postinstall.sh
+
+  - id: deb-agent
+    ids: [nnet-agent]
+    package_name: n-netman-agent
+    vendor: Nishisan Dev
+    homepage: https://github.com/nishisan-dev/n-netman
+    maintainer: Nishisan Dev <dev@nishisan.dev>
+    description: n-netman VM agent - receives overlay routes over the inject channel
+    license: Nishi-NC
+    formats: [deb]
+    bindir: /usr/local/bin
+
+    contents:
+      - src: examples/agent.yaml
+        dst: /etc/n-netman/agent.yaml.example
+        type: config
+
+      - src: packaging/n-netman-agent.service
+        dst: /lib/systemd/system/n-netman-agent.service
+
+      - dst: /etc/n-netman
+        type: dir
+        file_info:
+          mode: 0755
+
+      # The shared key lives here; the directory is closed so a key dropped in
+      # with a careless umask is still not world readable.
+      - dst: /etc/n-netman/psk
+        type: dir
+        file_info:
+          mode: 0700
+
+    scripts:
+      postinstall: packaging/postinstall-agent.sh
 
 checksum:
   name_template: 'checksums.txt'
