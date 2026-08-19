@@ -8,6 +8,7 @@ import (
 
 	"github.com/nishisan-dev/n-netman/internal/config"
 	"github.com/nishisan-dev/n-netman/internal/controlplane"
+	"github.com/nishisan-dev/n-netman/internal/routepolicy"
 )
 
 // Manager handles route export and import according to configured policies.
@@ -117,31 +118,20 @@ func (m *Manager) ShouldImportForOverlay(route controlplane.Route, overlay confi
 }
 
 // evalImportPolicy applies an import policy to a parsed route network.
-// Deny takes precedence and matches on overlap (a broader announced prefix that
-// overlaps a denied subnet is still denied). Allow only matches when the route
-// is contained within an allowed supernet. With neither accept_all nor a
-// matching allow entry, the route is denied (secure default).
+//
+// The rules themselves live in internal/routepolicy so that nnet-agent can
+// apply the identical admission logic without importing the control plane.
 func evalImportPolicy(routeNet *net.IPNet, importCfg config.ImportConfig) bool {
-	// Deny list first (deny takes precedence) — overlap semantics.
-	for _, denyPrefix := range importCfg.Deny {
-		if prefixOverlaps(routeNet, denyPrefix) {
-			return false
-		}
-	}
+	return PolicyFromImport(importCfg).AdmitsNet(routeNet)
+}
 
-	// accept_all admits everything not explicitly denied above.
-	if importCfg.AcceptAll {
-		return true
+// PolicyFromImport adapts an import configuration into a route policy.
+func PolicyFromImport(importCfg config.ImportConfig) routepolicy.Policy {
+	return routepolicy.Policy{
+		AcceptAll: importCfg.AcceptAll,
+		Allow:     importCfg.Allow,
+		Deny:      importCfg.Deny,
 	}
-
-	// Allow list — the route must be within (subset of) an allowed prefix.
-	for _, allowPrefix := range importCfg.Allow {
-		if prefixWithin(routeNet, allowPrefix) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // GetImportTableForOverlay returns the routing table number for installing routes from an overlay.
@@ -151,34 +141,6 @@ func (m *Manager) GetImportTableForOverlay(overlay config.OverlayDef) int {
 		return 100 // default
 	}
 	return table
-}
-
-// prefixWithin reports whether routeNet is contained within (a subset of) the
-// policy prefix — i.e. the policy is a supernet of, or equal to, the route.
-// Used for allow lists, where admitting a broader route than allowed would
-// leak more than intended.
-func prefixWithin(routeNet *net.IPNet, policyPrefix string) bool {
-	_, policyNet, err := net.ParseCIDR(policyPrefix)
-	if err != nil {
-		return false
-	}
-	if !policyNet.Contains(routeNet.IP) {
-		return false
-	}
-	policyOnes, _ := policyNet.Mask.Size()
-	routeOnes, _ := routeNet.Mask.Size()
-	return policyOnes <= routeOnes
-}
-
-// prefixOverlaps reports whether routeNet and the policy prefix overlap in any
-// way — either one contains the other. Used for deny lists so that a broader
-// announced prefix that swallows a denied subnet is still rejected.
-func prefixOverlaps(routeNet *net.IPNet, policyPrefix string) bool {
-	_, policyNet, err := net.ParseCIDR(policyPrefix)
-	if err != nil {
-		return false
-	}
-	return policyNet.Contains(routeNet.IP) || routeNet.Contains(policyNet.IP)
 }
 
 // FilterImportRoutes filters a list of routes according to import policy.
