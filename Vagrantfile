@@ -86,8 +86,8 @@ Vagrant.configure("2") do |config|
         echo "vxlan" >> /etc/modules
         echo "bridge" >> /etc/modules
 
-        # Criar diretório de config e TLS
-        mkdir -p /etc/n-netman/tls
+        # Criar diretório de config, TLS e chave do canal de inject
+        mkdir -p /etc/n-netman/tls /etc/n-netman/psk
       SHELL
 
       # Copiar código fonte (synced folder) - precisa vir ANTES de gerar certs
@@ -125,7 +125,20 @@ Vagrant.configure("2") do |config|
         make build
         cp bin/nnetd /usr/local/bin/
         cp bin/nnet /usr/local/bin/
-        
+        cp bin/nnet-agent /usr/local/bin/
+
+        # Chave compartilhada do canal de inject. Gerada uma vez no synced
+        # folder, do mesmo jeito que os certificados, para que controller e
+        # agente concordem entre os nos.
+        PSK_DIR="/home/vagrant/n-netman/.vagrant-certs"
+        mkdir -p "$PSK_DIR" /etc/n-netman/psk
+        if [ ! -f "$PSK_DIR/inject.key" ]; then
+          head -c 32 /dev/urandom | base64 | tr -d '\n' > "$PSK_DIR/inject.key"
+        fi
+        cp "$PSK_DIR/inject.key" /etc/n-netman/psk/inject.key
+        chmod 700 /etc/n-netman/psk
+        chmod 600 /etc/n-netman/psk/inject.key
+
         echo "n-netman instalado em #{node[:name]}"
       SHELL
 
@@ -172,12 +185,17 @@ overlays:
     bridge:
       name: "br-prod"
       ipv4: "#{node[:br_prod_ip]}"
+      tags:
+        - "it"
+        - "lab"
     underlay_interface: "enp0s8"
     routing:
       export:
         networks:
           - "#{node[:prod_net]}"
         metric: 100
+        tags:
+          - "it"
       import:
         accept_all: true
         install:
@@ -209,6 +227,22 @@ overlays:
           route_lease_seconds: 30
           lookup_rules:
             enabled: true
+
+# Route injection into VMs attached to br-prod. nnet-agent inside a VM (or a
+# network namespace, see scripts/lab-agent-test.sh) picks these up.
+routing:
+  inject:
+    enabled: true
+    port: 4790
+    interval_seconds: 5
+    lease_seconds: 20
+    psk_ref: "file:/etc/n-netman/psk/inject.key"
+    key_id: "lab"
+    rules:
+      - match_tags: ["it"]
+        from_rib: true
+        route_tags: ["it"]
+        metric: 100
 
 # Peers (v2: declared at the root level, used for FDB sync and route exchange)
 peers:

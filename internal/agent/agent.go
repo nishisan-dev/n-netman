@@ -194,7 +194,9 @@ func newSegment(
 		Keys:       keys,
 		ExpectTags: ifaceCfg.ExpectTags,
 	},
-		inject.WithListenerLogger(s.logger),
+		// The undecorated logger: the listener names the interface itself, and
+		// passing s.logger would print the attribute twice.
+		inject.WithListenerLogger(logger),
 		inject.WithRejectHandler(s.onReject),
 	)
 	if err != nil {
