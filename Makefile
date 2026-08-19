@@ -1,4 +1,4 @@
-.PHONY: all build test test-coverage lint clean install
+.PHONY: all build test test-coverage test-integration test-integration-netns lint clean install
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -27,10 +27,22 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
-## test-integration: Run integration tests (requires root)
+## test-integration: Run integration tests (needs CAP_NET_ADMIN, i.e. root)
 test-integration:
-	@if [ "$$(id -u)" != "0" ]; then echo "Integration tests require root"; exit 1; fi
-	go test -v -tags=integration ./...
+	@if [ "$$(id -u)" != "0" ]; then \
+		echo "Integration tests need CAP_NET_ADMIN."; \
+		echo "Run as root, or without root via: make test-integration-netns"; \
+		exit 1; \
+	fi
+	go test -v -race -tags=integration ./...
+
+## test-integration-netns: Run integration tests without root, in a throwaway
+## network namespace. The binary is compiled outside the namespace because the
+## Go toolchain may not be reachable inside it (e.g. a snap install).
+test-integration-netns:
+	@mkdir -p bin
+	go test -c -race -tags=integration -o bin/agent.integration.test ./internal/agent
+	unshare --net --user --map-root-user sh -c 'ip link set lo up; ./bin/agent.integration.test -test.v -test.timeout 180s'
 
 ## lint: Run linters
 lint:
