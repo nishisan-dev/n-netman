@@ -45,6 +45,7 @@ It allows you to apply configurations, check status, and manage your VXLAN overl
 	rootCmd.AddCommand(statusCmd())
 	rootCmd.AddCommand(routesCmd())
 	rootCmd.AddCommand(doctorCmd())
+	rootCmd.AddCommand(injectCmd())
 	rootCmd.AddCommand(libvirtCmd())
 	rootCmd.AddCommand(certCmd())
 

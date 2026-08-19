@@ -204,6 +204,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer stopInjectPublishers(injectPublishers, logger)
+	if len(injectPublishers) > 0 {
+		obsServer.SetInjectStatusProvider(NewInjectStatusProvider(injectPublishers))
+	}
 
 	// Mark as ready
 	obsServer.SetReady(true)

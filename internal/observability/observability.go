@@ -32,6 +32,35 @@ type NodeStatus struct {
 	Uptime string                `json:"uptime"`
 	Peers  map[string]PeerStatus `json:"peers"`
 	Routes RouteStats            `json:"routes"`
+	// Inject is present only when the injection channel is enabled.
+	Inject []InjectSegmentStatus `json:"inject,omitempty"`
+}
+
+// InjectSegmentStatus reports one bridge's advertisement, as produced by
+// inject.Publisher.Status. It is duplicated as a plain struct so this package
+// does not depend on internal/inject.
+type InjectSegmentStatus struct {
+	Segment        string    `json:"segment"`
+	VNI            uint32    `json:"vni"`
+	Bridge         string    `json:"bridge"`
+	Tags           []string  `json:"tags"`
+	Group          string    `json:"group"`
+	Port           int       `json:"port"`
+	RulesMatched   int       `json:"rules_matched"`
+	Routes         int       `json:"routes"`
+	DefaultGateway string    `json:"default_gateway,omitempty"`
+	Sequence       uint64    `json:"sequence"`
+	LastPublished  time.Time `json:"last_published,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+}
+
+// InjectStatusProvider optionally reports the injection channel's state.
+//
+// It is separate from StatusProvider because the two are implemented by
+// different components: peers come from the control plane client, segments from
+// the publishers.
+type InjectStatusProvider interface {
+	GetInjectStatus() []InjectSegmentStatus
 }
 
 // RouteStats contains route statistics.
@@ -227,6 +256,7 @@ type Server struct {
 	metricsServer  *http.Server
 	healthServer   *http.Server
 	statusProvider StatusProvider
+	injectProvider InjectStatusProvider
 
 	mu         sync.RWMutex
 	healthy    bool
@@ -251,6 +281,13 @@ func (s *Server) SetStatusProvider(provider StatusProvider) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statusProvider = provider
+}
+
+// SetInjectStatusProvider registers the injection channel's status source.
+func (s *Server) SetInjectStatusProvider(provider InjectStatusProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.injectProvider = provider
 }
 
 // SetHealthFunc registers a predicate that reflects the daemon's real health
@@ -384,6 +421,7 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	provider := s.statusProvider
+	injectProvider := s.injectProvider
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -414,6 +452,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		for _, o := range s.cfg.GetOverlays() {
 			status.Routes.Exported += len(o.Routing.Export.Networks)
 		}
+	}
+
+	if injectProvider != nil {
+		status.Inject = injectProvider.GetInjectStatus()
 	}
 
 	data, err := json.Marshal(status)

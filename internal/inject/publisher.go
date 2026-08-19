@@ -69,8 +69,25 @@ type Publisher struct {
 	metrics   *observability.Metrics
 	vniLabel  string
 
-	mu  sync.Mutex
-	seq uint64
+	mu     sync.Mutex
+	seq    uint64
+	status Status
+}
+
+// Status summarises what a publisher last put on the wire.
+type Status struct {
+	Segment        string    `json:"segment"`
+	VNI            uint32    `json:"vni"`
+	Bridge         string    `json:"bridge"`
+	Tags           []string  `json:"tags"`
+	Group          string    `json:"group"`
+	Port           int       `json:"port"`
+	RulesMatched   int       `json:"rules_matched"`
+	Routes         int       `json:"routes"`
+	DefaultGateway string    `json:"default_gateway,omitempty"`
+	Sequence       uint64    `json:"sequence"`
+	LastPublished  time.Time `json:"last_published,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
 }
 
 // Option configures a Publisher.
@@ -143,9 +160,42 @@ func NewPublisher(cfg PublisherConfig, opts ...Option) (*Publisher, error) {
 			return nil, fmt.Errorf("inject publisher for %s: %w", cfg.BridgeName, err)
 		}
 		p.transport = transport
+		p.status.Group = group.String()
 	}
 
+	p.status.Segment = cfg.Segment
+	p.status.VNI = cfg.VNI
+	p.status.Bridge = cfg.BridgeName
+	p.status.Tags = cfg.Tags
+	p.status.Port = cfg.Inject.GetPort()
+	p.status.RulesMatched = len(rules)
+
 	return p, nil
+}
+
+// Status returns a snapshot of the last advertisement.
+func (p *Publisher) Status() Status {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.status
+}
+
+// recordFailure stores why the most recent cycle produced nothing, so a
+// publisher that is running but silent can be told apart from a healthy one.
+func (p *Publisher) recordFailure(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.LastError = err.Error()
+}
+
+func (p *Publisher) recordSuccess(adv *pb.Advertisement, at time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.Routes = len(adv.GetRoutes())
+	p.status.DefaultGateway = adv.GetDefaultGateway()
+	p.status.Sequence = adv.GetSequence()
+	p.status.LastPublished = at
+	p.status.LastError = ""
 }
 
 // Run publishes an advertisement immediately and then on every interval until
@@ -180,6 +230,7 @@ func (p *Publisher) Advertise() error {
 	adv, err := p.buildAdvertisement(time.Now())
 	if err != nil {
 		p.countError("build")
+		p.recordFailure(err)
 		return err
 	}
 
@@ -189,13 +240,18 @@ func (p *Publisher) Advertise() error {
 		// keep their previous route set until it expires rather than converging
 		// on a silently truncated one.
 		p.countError("seal")
+		p.recordFailure(err)
 		return err
 	}
 
 	if err := p.transport.Send(datagram); err != nil {
 		p.countError("send")
-		return fmt.Errorf("failed to send advertisement on %s: %w", p.cfg.BridgeName, err)
+		wrapped := fmt.Errorf("failed to send advertisement on %s: %w", p.cfg.BridgeName, err)
+		p.recordFailure(wrapped)
+		return wrapped
 	}
+
+	p.recordSuccess(adv, time.Now())
 
 	if p.metrics != nil {
 		p.metrics.InjectAdvertisementsSent.WithLabelValues(p.vniLabel).Inc()

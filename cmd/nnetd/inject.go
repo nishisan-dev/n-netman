@@ -107,6 +107,38 @@ func startInjectPublishers(
 	return publishers, nil
 }
 
+// injectStatus reports the publishers' state on /status.
+type injectStatus struct {
+	publishers []*inject.Publisher
+}
+
+func (i injectStatus) GetInjectStatus() []observability.InjectSegmentStatus {
+	out := make([]observability.InjectSegmentStatus, 0, len(i.publishers))
+	for _, p := range i.publishers {
+		s := p.Status()
+		out = append(out, observability.InjectSegmentStatus{
+			Segment:        s.Segment,
+			VNI:            s.VNI,
+			Bridge:         s.Bridge,
+			Tags:           s.Tags,
+			Group:          s.Group,
+			Port:           s.Port,
+			RulesMatched:   s.RulesMatched,
+			Routes:         s.Routes,
+			DefaultGateway: s.DefaultGateway,
+			Sequence:       s.Sequence,
+			LastPublished:  s.LastPublished,
+			LastError:      s.LastError,
+		})
+	}
+	return out
+}
+
+// NewInjectStatusProvider exposes the publishers to the /status endpoint.
+func NewInjectStatusProvider(publishers []*inject.Publisher) observability.InjectStatusProvider {
+	return injectStatus{publishers: publishers}
+}
+
 // stopInjectPublishers releases the publishers' sockets.
 func stopInjectPublishers(publishers []*inject.Publisher, logger *slog.Logger) {
 	for _, p := range publishers {
