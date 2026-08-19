@@ -1,6 +1,7 @@
 package netlink
 
 import (
+	"errors"
 	"fmt"
 	"net"
 
@@ -198,6 +199,10 @@ func (m *RouteManager) FlushByProtocol(table, protocol int) error {
 		return err
 	}
 
+	// Keep deleting after a failure so one stuck route cannot strand the rest,
+	// but report what failed instead of printing to stdout: this package is a
+	// library used by daemons that log structurally.
+	var errs []error
 	for _, r := range routes {
 		cfg := RouteConfig{
 			Destination: r.Destination,
@@ -206,80 +211,82 @@ func (m *RouteManager) FlushByProtocol(table, protocol int) error {
 			Protocol:    protocol,
 		}
 		if err := m.Delete(cfg); err != nil {
-			// Log but continue
-			fmt.Printf("warning: failed to delete route %s: %v\n", r.Destination, err)
+			errs = append(errs, fmt.Errorf("route %s: %w", r.Destination, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
-// Sync synchronizes routes with a desired state.
-// Adds missing routes, removes extra routes (installed by n-netman).
-func (m *RouteManager) Sync(table int, desired []RouteConfig) error {
-	// Get current n-netman routes
-	current, err := m.ListByProtocol(table, RouteProtocolNNetMan)
+// Sync reconciles the routes owned by a protocol in a table against a desired
+// set: missing routes are added, changed ones replaced, and routes this
+// protocol installed but no longer wants are removed.
+//
+// The kernel keeps one route per destination in a table, so the desired set
+// must already hold at most one entry per destination; the caller is what
+// decides which of several candidates wins.
+//
+// Removal is scoped to the given protocol, so a route installed by anything
+// else is never touched.
+func (m *RouteManager) Sync(table, protocol int, desired []RouteConfig) error {
+	current, err := m.ListByProtocol(table, protocol)
 	if err != nil {
 		return err
 	}
 
-	// Build set of current routes by destination for quick diff.
-	currentSet := make(map[string]RouteInfo)
+	currentSet := make(map[string]RouteInfo, len(current))
 	for _, r := range current {
 		if r.Destination != nil {
 			currentSet[r.Destination.String()] = r
 		}
 	}
 
-	// Build set of desired routes for diffing removals.
-	desiredSet := make(map[string]RouteConfig)
+	desiredSet := make(map[string]RouteConfig, len(desired))
 	for _, r := range desired {
 		if r.Destination != nil {
 			desiredSet[r.Destination.String()] = r
 		}
 	}
 
-	// Add/update missing routes
+	var errs []error
+
 	for _, r := range desired {
 		if r.Destination == nil {
 			continue
 		}
-		key := r.Destination.String()
-		r.Protocol = RouteProtocolNNetMan
+		r.Table = table
+		r.Protocol = protocol
 
-		if existing, ok := currentSet[key]; ok {
-			// Route exists, check if it needs updating
-			if !existing.Gateway.Equal(r.Gateway) || existing.Metric != r.Metric {
-				if err := m.Replace(r); err != nil {
-					return err
-				}
-			}
-		} else {
-			// Route doesn't exist, add it
+		existing, ok := currentSet[r.Destination.String()]
+		if !ok {
 			if err := m.Add(r); err != nil {
-				return err
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if !existing.Gateway.Equal(r.Gateway) || existing.Metric != r.Metric {
+			if err := m.Replace(r); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}
 
-	// Remove stale routes
 	for _, r := range current {
 		if r.Destination == nil {
 			continue
 		}
-		key := r.Destination.String()
-		if _, ok := desiredSet[key]; !ok {
-			cfg := RouteConfig{
-				Destination: r.Destination,
-				Gateway:     r.Gateway,
-				Table:       table,
-				Protocol:    RouteProtocolNNetMan,
-			}
-			if err := m.Delete(cfg); err != nil {
-				fmt.Printf("warning: failed to remove stale route %s: %v\n", r.Destination, err)
-			}
+		if _, ok := desiredSet[r.Destination.String()]; ok {
+			continue
+		}
+		if err := m.Delete(RouteConfig{
+			Destination: r.Destination,
+			Gateway:     r.Gateway,
+			Table:       table,
+			Protocol:    protocol,
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("stale route %s: %w", r.Destination, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
