@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/net/ipv4"
 
-	pb "github.com/nishisan-dev/n-netman/api/v1"
+	pb "github.com/nishisan-dev/n-netman/api/inject/v1"
 	"github.com/nishisan-dev/n-netman/internal/config"
 	"github.com/nishisan-dev/n-netman/internal/observability"
 )

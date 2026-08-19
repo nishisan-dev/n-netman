@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.12.4
-// source: api/v1/inject.proto
+// source: api/inject/v1/inject.proto
 
-package nnetmanv1
+package injectv1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -42,7 +42,7 @@ type InjectEnvelope struct {
 
 func (x *InjectEnvelope) Reset() {
 	*x = InjectEnvelope{}
-	mi := &file_api_v1_inject_proto_msgTypes[0]
+	mi := &file_api_inject_v1_inject_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -54,7 +54,7 @@ func (x *InjectEnvelope) String() string {
 func (*InjectEnvelope) ProtoMessage() {}
 
 func (x *InjectEnvelope) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_inject_proto_msgTypes[0]
+	mi := &file_api_inject_v1_inject_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -67,7 +67,7 @@ func (x *InjectEnvelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InjectEnvelope.ProtoReflect.Descriptor instead.
 func (*InjectEnvelope) Descriptor() ([]byte, []int) {
-	return file_api_v1_inject_proto_rawDescGZIP(), []int{0}
+	return file_api_inject_v1_inject_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *InjectEnvelope) GetVersion() uint32 {
@@ -131,7 +131,7 @@ type Advertisement struct {
 
 func (x *Advertisement) Reset() {
 	*x = Advertisement{}
-	mi := &file_api_v1_inject_proto_msgTypes[1]
+	mi := &file_api_inject_v1_inject_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -143,7 +143,7 @@ func (x *Advertisement) String() string {
 func (*Advertisement) ProtoMessage() {}
 
 func (x *Advertisement) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_inject_proto_msgTypes[1]
+	mi := &file_api_inject_v1_inject_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -156,7 +156,7 @@ func (x *Advertisement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Advertisement.ProtoReflect.Descriptor instead.
 func (*Advertisement) Descriptor() ([]byte, []int) {
-	return file_api_v1_inject_proto_rawDescGZIP(), []int{1}
+	return file_api_inject_v1_inject_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Advertisement) GetControllerId() string {
@@ -244,7 +244,7 @@ type InjectedRoute struct {
 
 func (x *InjectedRoute) Reset() {
 	*x = InjectedRoute{}
-	mi := &file_api_v1_inject_proto_msgTypes[2]
+	mi := &file_api_inject_v1_inject_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -256,7 +256,7 @@ func (x *InjectedRoute) String() string {
 func (*InjectedRoute) ProtoMessage() {}
 
 func (x *InjectedRoute) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_inject_proto_msgTypes[2]
+	mi := &file_api_inject_v1_inject_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -269,7 +269,7 @@ func (x *InjectedRoute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InjectedRoute.ProtoReflect.Descriptor instead.
 func (*InjectedRoute) Descriptor() ([]byte, []int) {
-	return file_api_v1_inject_proto_rawDescGZIP(), []int{2}
+	return file_api_inject_v1_inject_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *InjectedRoute) GetPrefix() string {
@@ -293,17 +293,16 @@ func (x *InjectedRoute) GetMetric() uint32 {
 	return 0
 }
 
-var File_api_v1_inject_proto protoreflect.FileDescriptor
+var File_api_inject_v1_inject_proto protoreflect.FileDescriptor
 
-const file_api_v1_inject_proto_rawDesc = "" +
+const file_api_inject_v1_inject_proto_rawDesc = "" +
 	"\n" +
-	"\x13api/v1/inject.proto\x12\n" +
-	"nnetman.v1\"m\n" +
+	"\x1aapi/inject/v1/inject.proto\x12\x11nnetman.inject.v1\"m\n" +
 	"\x0eInjectEnvelope\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x12\x15\n" +
 	"\x06key_id\x18\x02 \x01(\tR\x05keyId\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x10\n" +
-	"\x03mac\x18\x04 \x01(\fR\x03mac\"\xd4\x02\n" +
+	"\x03mac\x18\x04 \x01(\fR\x03mac\"\xdb\x02\n" +
 	"\rAdvertisement\x12#\n" +
 	"\rcontroller_id\x18\x01 \x01(\tR\fcontrollerId\x12\x10\n" +
 	"\x03vni\x18\x02 \x01(\rR\x03vni\x12\x18\n" +
@@ -314,35 +313,35 @@ const file_api_v1_inject_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\a \x01(\x04R\n" +
 	"generation\x12#\n" +
-	"\rlease_seconds\x18\b \x01(\rR\fleaseSeconds\x121\n" +
-	"\x06routes\x18\t \x03(\v2\x19.nnetman.v1.InjectedRouteR\x06routes\x12'\n" +
+	"\rlease_seconds\x18\b \x01(\rR\fleaseSeconds\x128\n" +
+	"\x06routes\x18\t \x03(\v2 .nnetman.inject.v1.InjectedRouteR\x06routes\x12'\n" +
 	"\x0fdefault_gateway\x18\n" +
 	" \x01(\tR\x0edefaultGateway\"Z\n" +
 	"\rInjectedRoute\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x19\n" +
 	"\bnext_hop\x18\x02 \x01(\tR\anextHop\x12\x16\n" +
-	"\x06metric\x18\x03 \x01(\rR\x06metricB3Z1github.com/nishisan-dev/n-netman/api/v1;nnetmanv1b\x06proto3"
+	"\x06metric\x18\x03 \x01(\rR\x06metricB9Z7github.com/nishisan-dev/n-netman/api/inject/v1;injectv1b\x06proto3"
 
 var (
-	file_api_v1_inject_proto_rawDescOnce sync.Once
-	file_api_v1_inject_proto_rawDescData []byte
+	file_api_inject_v1_inject_proto_rawDescOnce sync.Once
+	file_api_inject_v1_inject_proto_rawDescData []byte
 )
 
-func file_api_v1_inject_proto_rawDescGZIP() []byte {
-	file_api_v1_inject_proto_rawDescOnce.Do(func() {
-		file_api_v1_inject_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_v1_inject_proto_rawDesc), len(file_api_v1_inject_proto_rawDesc)))
+func file_api_inject_v1_inject_proto_rawDescGZIP() []byte {
+	file_api_inject_v1_inject_proto_rawDescOnce.Do(func() {
+		file_api_inject_v1_inject_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_inject_v1_inject_proto_rawDesc), len(file_api_inject_v1_inject_proto_rawDesc)))
 	})
-	return file_api_v1_inject_proto_rawDescData
+	return file_api_inject_v1_inject_proto_rawDescData
 }
 
-var file_api_v1_inject_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
-var file_api_v1_inject_proto_goTypes = []any{
-	(*InjectEnvelope)(nil), // 0: nnetman.v1.InjectEnvelope
-	(*Advertisement)(nil),  // 1: nnetman.v1.Advertisement
-	(*InjectedRoute)(nil),  // 2: nnetman.v1.InjectedRoute
+var file_api_inject_v1_inject_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_api_inject_v1_inject_proto_goTypes = []any{
+	(*InjectEnvelope)(nil), // 0: nnetman.inject.v1.InjectEnvelope
+	(*Advertisement)(nil),  // 1: nnetman.inject.v1.Advertisement
+	(*InjectedRoute)(nil),  // 2: nnetman.inject.v1.InjectedRoute
 }
-var file_api_v1_inject_proto_depIdxs = []int32{
-	2, // 0: nnetman.v1.Advertisement.routes:type_name -> nnetman.v1.InjectedRoute
+var file_api_inject_v1_inject_proto_depIdxs = []int32{
+	2, // 0: nnetman.inject.v1.Advertisement.routes:type_name -> nnetman.inject.v1.InjectedRoute
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -350,26 +349,26 @@ var file_api_v1_inject_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_api_v1_inject_proto_init() }
-func file_api_v1_inject_proto_init() {
-	if File_api_v1_inject_proto != nil {
+func init() { file_api_inject_v1_inject_proto_init() }
+func file_api_inject_v1_inject_proto_init() {
+	if File_api_inject_v1_inject_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_v1_inject_proto_rawDesc), len(file_api_v1_inject_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_inject_v1_inject_proto_rawDesc), len(file_api_inject_v1_inject_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_api_v1_inject_proto_goTypes,
-		DependencyIndexes: file_api_v1_inject_proto_depIdxs,
-		MessageInfos:      file_api_v1_inject_proto_msgTypes,
+		GoTypes:           file_api_inject_v1_inject_proto_goTypes,
+		DependencyIndexes: file_api_inject_v1_inject_proto_depIdxs,
+		MessageInfos:      file_api_inject_v1_inject_proto_msgTypes,
 	}.Build()
-	File_api_v1_inject_proto = out.File
-	file_api_v1_inject_proto_goTypes = nil
-	file_api_v1_inject_proto_depIdxs = nil
+	File_api_inject_v1_inject_proto = out.File
+	file_api_inject_v1_inject_proto_goTypes = nil
+	file_api_inject_v1_inject_proto_depIdxs = nil
 }

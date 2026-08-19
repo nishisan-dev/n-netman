@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/net/ipv4"
 
-	pb "github.com/nishisan-dev/n-netman/api/v1"
+	pb "github.com/nishisan-dev/n-netman/api/inject/v1"
 )
 
 // readBufferSize is larger than MaxDatagramSize so an oversized datagram is

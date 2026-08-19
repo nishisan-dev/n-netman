@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/nishisan-dev/n-netman/api/v1"
+	pb "github.com/nishisan-dev/n-netman/api/inject/v1"
 )
 
 const (

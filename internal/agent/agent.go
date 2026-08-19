@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/nishisan-dev/n-netman/api/v1"
+	pb "github.com/nishisan-dev/n-netman/api/inject/v1"
 	"github.com/nishisan-dev/n-netman/internal/agentconfig"
 	"github.com/nishisan-dev/n-netman/internal/inject"
 	nlink "github.com/nishisan-dev/n-netman/internal/netlink"

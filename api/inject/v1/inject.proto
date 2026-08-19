@@ -1,8 +1,11 @@
 syntax = "proto3";
 
-package nnetman.v1;
+package nnetman.inject.v1;
 
-option go_package = "github.com/nishisan-dev/n-netman/api/v1;nnetmanv1";
+// A package of its own, not api/v1: that package carries the gRPC service
+// stubs, and nnet-agent must not link a gRPC runtime into a VM just to parse an
+// advertisement.
+option go_package = "github.com/nishisan-dev/n-netman/api/inject/v1;injectv1";
 
 // The inject channel carries route information from a controller (nnetd) to
 // agents running inside VMs attached to a tagged bridge. Unlike the NNetMan
