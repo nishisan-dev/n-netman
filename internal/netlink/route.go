@@ -6,6 +6,7 @@ import (
 	"net"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // RouteManager manages Linux routing table entries.
@@ -39,6 +40,14 @@ const (
 	// RouteProtocolNNetMan so the two remain separable on a host that runs both.
 	RouteProtocolNNetAgent = 98
 )
+
+// RouteTableMain is the kernel's main routing table.
+//
+// Pass this rather than 0 when the main table is what you mean: a table of 0 is
+// RT_TABLE_UNSPEC, which the kernel resolves to main on a write but which makes
+// List return routes from every table on a read. Being explicit keeps the two
+// directions symmetric.
+const RouteTableMain = unix.RT_TABLE_MAIN
 
 // Add adds a route to the routing table.
 func (m *RouteManager) Add(cfg RouteConfig) error {
@@ -130,6 +139,9 @@ func (m *RouteManager) Replace(cfg RouteConfig) error {
 }
 
 // List returns all routes in a routing table.
+//
+// A table of 0 (RT_TABLE_UNSPEC) disables the filter and returns routes from
+// every table, so callers that mean the main table should pass RouteTableMain.
 func (m *RouteManager) List(table int) ([]RouteInfo, error) {
 	filter := &netlink.Route{}
 	if table > 0 {
