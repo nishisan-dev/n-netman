@@ -72,6 +72,13 @@ type Metrics struct {
 	// Control plane metrics
 	GRPCRequestsTotal   *prometheus.CounterVec
 	GRPCRequestDuration *prometheus.HistogramVec
+
+	// Inject channel metrics (controller side). Labelled by VNI because a host
+	// publishes an independent advertisement per tagged bridge.
+	InjectAdvertisementsSent *prometheus.CounterVec
+	InjectPublishErrors      *prometheus.CounterVec
+	InjectRoutesAdvertised   *prometheus.GaugeVec
+	InjectLastAdvertisement  *prometheus.GaugeVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics.
@@ -149,6 +156,26 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help:      "Duration of gRPC requests",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"method"}),
+		InjectAdvertisementsSent: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "nnetman",
+			Name:      "inject_advertisements_sent_total",
+			Help:      "Total number of inject advertisements published",
+		}, []string{"vni"}),
+		InjectPublishErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "nnetman",
+			Name:      "inject_publish_errors_total",
+			Help:      "Total number of inject advertisements that could not be published",
+		}, []string{"vni", "reason"}),
+		InjectRoutesAdvertised: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "nnetman",
+			Name:      "inject_routes_advertised",
+			Help:      "Number of routes in the most recent advertisement",
+		}, []string{"vni"}),
+		InjectLastAdvertisement: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "nnetman",
+			Name:      "inject_last_advertisement_timestamp_seconds",
+			Help:      "Timestamp of the last published advertisement",
+		}, []string{"vni"}),
 	}
 
 	// Register all metrics. If a collector is already registered (e.g. the
@@ -168,6 +195,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m.RoutesImported = registerOrExisting(reg, m.RoutesImported)
 	m.GRPCRequestsTotal = registerOrExisting(reg, m.GRPCRequestsTotal)
 	m.GRPCRequestDuration = registerOrExisting(reg, m.GRPCRequestDuration)
+	m.InjectAdvertisementsSent = registerOrExisting(reg, m.InjectAdvertisementsSent)
+	m.InjectPublishErrors = registerOrExisting(reg, m.InjectPublishErrors)
+	m.InjectRoutesAdvertised = registerOrExisting(reg, m.InjectRoutesAdvertised)
+	m.InjectLastAdvertisement = registerOrExisting(reg, m.InjectLastAdvertisement)
 
 	return m
 }
