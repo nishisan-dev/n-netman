@@ -417,6 +417,79 @@ observability:
 
 ---
 
+
+## Seção: routing.inject
+
+Canal de injeção de rotas para as VMs. Declarado na **raiz** de `routing:`, para que uma política valha para toda bridge que carregue a tag. Ver [inject.md](inject.md).
+
+```yaml
+routing:
+  inject:
+    enabled: true
+    group_base: "239.8.0.0"     # default; precisa terminar em 0.0
+    port: 4790                  # default
+    interval_seconds: 10        # intervalo entre anúncios
+    lease_seconds: 30           # validade das rotas no agente
+    psk_ref: "file:/etc/n-netman/psk/inject.key"
+    key_id: "k1"                # identifica a chave, para rotação
+    rules:
+      - match_tags: ["it"]      # AND: a bridge precisa ter todas
+        from_rib: true          # anuncia também rotas aprendidas de peers
+        route_tags: ["it"]      # filtra as do RIB por community
+        networks: ["172.16.10.0/24"]
+        metric: 100
+        next_hop: "10.100.0.254"     # opcional; default é bridge.ipv4
+        default_gateway: "10.100.0.1" # opcional
+```
+
+| Campo | Tipo | Default | Descrição |
+|---|---|---|---|
+| `enabled` | bool | `false` | Liga o canal |
+| `group_base` | IPv4 multicast | `239.8.0.0` | Base do grupo; o VNI entra nos dois últimos octetos |
+| `port` | int | `4790` | Porta UDP |
+| `interval_seconds` | int | `10` | Intervalo de republicação |
+| `lease_seconds` | int | `30` | Por quanto tempo o agente mantém as rotas |
+| `psk_ref` | string | — | Obrigatório quando `enabled`. Formato `file:/caminho` |
+| `key_id` | string | `""` | Identificador da chave nos anúncios |
+| `rules[].match_tags` | []string | — | Obrigatório. Casa quando **todas** estão na bridge |
+| `rules[].networks` | []CIDR | `[]` | Prefixos anunciados literalmente |
+| `rules[].from_rib` | bool | `false` | Anuncia também as rotas aprendidas do overlay |
+| `rules[].route_tags` | []string | `[]` | Filtra as rotas do RIB por community; vazio = todas |
+| `rules[].next_hop` | IP | `bridge.ipv4` | Sobrescreve o next-hop anunciado |
+| `rules[].metric` | int | `100` | Métrica anunciada |
+| `rules[].default_gateway` | IP | `""` | Anuncia um default para o segmento |
+
+Uma regra que não anuncia nada (`networks` vazio, `from_rib` falso e sem `default_gateway`) é rejeitada na validação.
+
+## Seção: overlays[].bridge.tags
+
+Rótulos de texto livre que descrevem o segmento que a bridge carrega. As regras de `routing.inject` selecionam bridges por essas tags.
+
+```yaml
+overlays:
+  - vni: 100
+    bridge:
+      name: "br-prod"
+      ipv4: "10.100.0.1/24"
+      tags: ["it", "external", "public"]
+```
+
+Tags duplicadas ou vazias são rejeitadas. Uma bridge sem tags não participa do canal de injeção.
+
+Quando uma regra seleciona a bridge e nem `bridge.ipv4` nem `rules[].next_hop` estão definidos, a configuração é rejeitada: as rotas anunciadas não teriam next-hop válido.
+
+## Seção: overlays[].routing.export.tags
+
+Communities anexadas a cada rota exportada por aquele overlay. Viajam com a rota até os peers e são o que as regras de inject filtram via `route_tags`.
+
+```yaml
+    routing:
+      export:
+        networks: ["172.16.10.0/24"]
+        tags: ["it"]
+```
+
+
 ## Valores Padrão
 
 Valores aplicados automaticamente quando não especificados:

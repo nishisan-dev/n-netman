@@ -26,6 +26,7 @@ routing:
     include_connected: true     # Reservado — NÃO implementado (ignorado)
     include_netplan_static: true  # Reservado — NÃO implementado (ignorado)
     metric: 100                 # Métrica aplicada às rotas anunciadas
+    tags: ["it"]                # Communities anexadas a cada rota exportada
 ```
 
 ### Fonte das Rotas Exportadas
@@ -38,6 +39,13 @@ Atualmente o export usa **apenas** a lista explícita `networks`. Os campos abai
 | `export_all: true` | NÃO implementado | (futuro) Exportaria todas as rotas da tabela main |
 | `include_connected: true` | NÃO implementado | (futuro) Adicionaria rotas conectadas |
 | `include_netplan_static: true` | NÃO implementado | (futuro) Adicionaria rotas estáticas do netplan |
+| `tags: [...]` | Implementado | Anexa communities às rotas exportadas |
+
+### Communities (`tags`)
+
+As tags viajam com a rota até os peers, no campo `tags` da mensagem `Route`. Hoje elas têm um consumidor: as regras de [injeção de rotas](inject.md) filtram por elas via `route_tags`, decidindo o que anunciar para as VMs de cada segmento.
+
+A política de import entre peers **não** avalia tags — ela decide apenas por prefixo (`allow`/`deny`).
 
 **Recomendação:** Declare explicitamente os prefixos em `networks`. Isso evita vazamento acidental de rotas internas.
 

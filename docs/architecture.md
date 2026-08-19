@@ -152,6 +152,14 @@ Principais operações:
 - **WithdrawRoutes:** Remove rotas da RouteTable e do kernel
 - **Keepalive:** Mantém conexão viva, atualiza `lastSeen` do peer
 
+### Inject Publisher
+
+`internal/inject`
+
+Publica rotas para as VMs conectadas às bridges marcadas com tags, num grupo multicast derivado do VNI. É alimentado pelo `RouteTable` do control plane através de um adaptador no `cmd/nnetd`, para que o pacote não dependa do gRPC e continue linkável dentro de uma VM.
+
+O mesmo pacote traz o `Listener`, usado pelo `nnet-agent`. Ver [inject.md](inject.md) e [agent.md](agent.md).
+
 ### Control Plane Client
 
 Gerencia conexões ativas para cada peer:

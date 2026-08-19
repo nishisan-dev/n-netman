@@ -1,0 +1,74 @@
+@startuml
+title Canal de Injeção de Rotas (Controller -> VM)
+
+participant "RouteTable\n(control plane)" as RT
+participant "inject.Publisher\n(nnetd)" as P
+participant "br-prod\ntags: [it, external]" as BR
+participant "inject.Listener\n(nnet-agent)" as L
+participant "SegmentState" as S
+participant "Kernel da VM" as K
+
+== Publicação (a cada interval_seconds) ==
+
+P -> RT: InjectableRoutes()
+RT --> P: rotas aprendidas + locais (prefixo, métrica, tags, VNI)
+
+P -> P: seleciona regras cujo match_tags\nesteja contido nas tags da bridge (AND)
+P -> P: une networks + rotas do RIB\nfiltradas por route_tags
+note right of P
+  Next-hop reescrito para o IP da bridge:
+  a VM manda o pacote para o host, que
+  é quem atravessa o overlay.
+end note
+
+P -> P: Seal(): HMAC-SHA256 com o PSK\n+ timestamp + sequência
+alt datagrama > 1400 bytes
+    P -> P: falha alto, não publica nada
+    note right of P
+      Truncar deixaria o agente
+      com um conjunto plausível
+      porém incompleto.
+    end note
+end
+
+P -> BR: UDP 239.8.0.100:4790, TTL=1
+BR -> L: flood no segmento L2\n(também via vxlan, para os outros hosts)
+
+== Recepção ==
+
+L -> L: Open(): verifica versão -> MAC -> janela de tempo -> sequência
+note right of L
+  MAC verificado antes de fazer
+  parse do payload e antes de
+  tocar o estado de replay.
+end note
+
+alt tags do segmento não contêm expect_tags
+    L -> L: descarta (tag_mismatch)
+    note right of L: NIC cabeada no segmento errado
+end
+
+L -> S: Apply(update, lease)
+S -> S: estado por controller_id\n(o segmento atravessa vários hosts)
+
+== Reconciliação ==
+
+S -> S: Desired(): união dos controllers vivos\numa rota por prefixo, menor métrica vence
+S -> K: RouteManager.Sync(tabela main, proto 98)
+K --> S: rotas programadas
+
+== Expiração ==
+
+loop a cada 1s
+    S -> S: Expire(): lease vencido?
+    alt controller silencioso
+        S -> K: remove apenas as rotas daquele controller
+        note right of S
+          Lease independente: os demais
+          controllers seguem carregando
+          as suas rotas.
+        end note
+    end
+end
+
+@enduml
