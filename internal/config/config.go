@@ -120,6 +120,11 @@ type BridgeConfig struct {
 	Name string `yaml:"name" validate:"required"`
 	IPv4 string `yaml:"ipv4,omitempty"` // CIDR format, e.g. "10.100.0.1/24" (validated in validateSemantics)
 	IPv6 string `yaml:"ipv6,omitempty"` // CIDR format, e.g. "fd00:100::1/64" (validated in validateSemantics)
+	// Tags are free-form labels describing the segment this bridge carries
+	// (e.g. "it", "external"). routing.inject rules select bridges by tag, so
+	// the controller decides what to advertise per segment without knowing
+	// which VMs are attached.
+	Tags []string `yaml:"tags,omitempty"`
 }
 
 // UnmarshalYAML implements custom unmarshaling to support both string and struct formats.
@@ -203,6 +208,7 @@ type RoutingConfig struct {
 	Enabled bool         `yaml:"enabled"`
 	Export  ExportConfig `yaml:"export"`
 	Import  ImportConfig `yaml:"import"`
+	Inject  InjectConfig `yaml:"inject"`
 }
 
 // ExportConfig defines which routes this node announces.
@@ -236,6 +242,123 @@ type InstallConfig struct {
 type LookupRulesConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Mode    string `yaml:"mode" validate:"omitempty,oneof=interface prefix"` // "interface" (default) or "prefix"
+}
+
+// InjectConfig defines the multicast channel used to advertise routes to
+// agents running inside VMs attached to a tagged bridge.
+//
+// Rules live at the root of 'routing:' rather than per overlay so a single
+// policy can cover every segment carrying a given tag.
+type InjectConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// GroupBase is the base of the multicast range. The group for an overlay is
+	// derived by OR-ing the low 16 bits of the VNI into the last two octets, so
+	// the base must have both of them set to zero. Defaults to 239.8.0.0.
+	GroupBase string `yaml:"group_base" validate:"omitempty,ipv4"`
+	// Port is the UDP port of the inject channel. Defaults to 4790.
+	Port int `yaml:"port" validate:"omitempty,min=1,max=65535"`
+	// IntervalSeconds is how often an advertisement is republished.
+	IntervalSeconds int `yaml:"interval_seconds" validate:"omitempty,min=1,max=300"`
+	// LeaseSeconds is how long agents keep the routes without a refresh.
+	LeaseSeconds int `yaml:"lease_seconds" validate:"omitempty,min=5,max=3600"`
+	// PSKRef points at the shared key used to authenticate advertisements,
+	// following the same "file:/path" convention as peers[].auth.psk_ref.
+	PSKRef string `yaml:"psk_ref"`
+	// KeyID identifies the key in published envelopes, enabling rotation.
+	KeyID string       `yaml:"key_id"`
+	Rules []InjectRule `yaml:"rules" validate:"dive"`
+}
+
+// InjectRule selects bridges by tag and describes what to advertise to them.
+type InjectRule struct {
+	// MatchTags uses AND semantics: every tag listed must be present on the
+	// bridge for the rule to apply. What a segment receives is the union of
+	// every rule that matched.
+	MatchTags []string `yaml:"match_tags" validate:"required,min=1"`
+	// Networks are prefixes advertised verbatim.
+	Networks []string `yaml:"networks" validate:"dive,cidr"`
+	// FromRIB also advertises routes learned from peers for the overlay.
+	FromRIB bool `yaml:"from_rib"`
+	// RouteTags filters RIB routes by their communities. Empty means no filter.
+	RouteTags []string `yaml:"route_tags"`
+	// NextHop overrides the advertised next-hop. Defaults to the bridge IPv4,
+	// which is the controller's own address on the segment.
+	NextHop string `yaml:"next_hop" validate:"omitempty,ip"`
+	Metric  int    `yaml:"metric" validate:"omitempty,min=1,max=4294967295"`
+	// DefaultGateway advertises a default route for the segment. Agents install
+	// it only when the receiving interface opts in.
+	DefaultGateway string `yaml:"default_gateway" validate:"omitempty,ip"`
+}
+
+// DefaultInjectGroupBase is the base of the multicast range used by the inject
+// channel. It is deliberately distinct from the 239.1.1.x convention used for
+// VXLAN BUM so the two never collide.
+const DefaultInjectGroupBase = "239.8.0.0"
+
+// Default values for the inject channel.
+const (
+	DefaultInjectPort     = 4790
+	DefaultInjectInterval = 10
+	DefaultInjectLease    = 30
+)
+
+// GetGroupBase returns the configured multicast base, or the default.
+func (i *InjectConfig) GetGroupBase() string {
+	if i.GroupBase == "" {
+		return DefaultInjectGroupBase
+	}
+	return i.GroupBase
+}
+
+// GetPort returns the configured UDP port, or the default.
+func (i *InjectConfig) GetPort() int {
+	if i.Port <= 0 {
+		return DefaultInjectPort
+	}
+	return i.Port
+}
+
+// GetInterval returns the advertisement interval.
+func (i *InjectConfig) GetInterval() time.Duration {
+	if i.IntervalSeconds <= 0 {
+		return DefaultInjectInterval * time.Second
+	}
+	return time.Duration(i.IntervalSeconds) * time.Second
+}
+
+// GetLeaseSeconds returns the lease advertised to agents.
+func (i *InjectConfig) GetLeaseSeconds() int {
+	if i.LeaseSeconds <= 0 {
+		return DefaultInjectLease
+	}
+	return i.LeaseSeconds
+}
+
+// MatchingRules returns the rules that apply to a bridge carrying the given
+// tags. A rule matches when every one of its match_tags is present (AND).
+func (i *InjectConfig) MatchingRules(bridgeTags []string) []InjectRule {
+	if len(bridgeTags) == 0 {
+		return nil
+	}
+	have := make(map[string]struct{}, len(bridgeTags))
+	for _, t := range bridgeTags {
+		have[t] = struct{}{}
+	}
+
+	var out []InjectRule
+	for _, r := range i.Rules {
+		matched := true
+		for _, want := range r.MatchTags {
+			if _, ok := have[want]; !ok {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // TopologyConfig defines the network topology mode.

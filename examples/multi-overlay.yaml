@@ -27,6 +27,8 @@ overlays:
     bridge:
       name: "br-prod"
       ipv4: "10.100.0.1/24"
+      # Free-form segment labels. routing.inject rules select bridges by tag.
+      tags: ["it", "external"]
     underlay_interface: "ens3"
     # BUM (Broadcast, Unknown Unicast, Multicast) traffic handling
     bum:
@@ -59,6 +61,7 @@ overlays:
     bridge:
       name: "br-mgmt"
       ipv4: "10.200.1.1/24"
+      tags: ["mgmt"]
     underlay_interface: "ens4"
     # BUM via multicast group (requires underlay multicast support)
     bum:
@@ -75,6 +78,28 @@ overlays:
           table: 200
           flush_on_peer_down: true
           route_lease_seconds: 60
+
+# Route injection into VMs (multicast channel on each tagged bridge).
+# The controller publishes signed advertisements; nnet-agent inside the VMs
+# consumes them and programs routes. See docs/inject.md.
+routing:
+  inject:
+    enabled: false                # set to true after distributing the PSK
+    port: 4790                    # default
+    interval_seconds: 10
+    lease_seconds: 30
+    psk_ref: "file:/etc/n-netman/psk/inject.key"
+    key_id: "k1"
+    rules:
+      # AND semantics: the bridge must carry every tag listed here.
+      - match_tags: ["it"]
+        from_rib: true            # advertise routes learned from peers
+        route_tags: ["it"]        # ...filtered by community; omit for all
+        networks:
+          - "172.16.10.0/24"
+        metric: 100
+      - match_tags: ["it", "external"]
+        default_gateway: "10.100.0.1"
 
 # Peer configuration (v2: declared at the root). Use 'vnis' to scope a peer to
 # specific overlays; omit it to have the peer participate in every overlay.
