@@ -565,3 +565,70 @@ Registro para decisão à parte — nenhum destes bloqueia o plano:
 3. **`ip rule` nunca é removida** — `netlink.DeleteRulesByInterface` não tem chamador; regras vazam a cada reconfiguração.
 4. **RPC `Keepalive` é código morto** — implementado no servidor, nenhum cliente chama; o health real usa `ExchangeState` como probe.
 5. **`topology.*` e `routing.enabled` são config inerte** — já assumido conscientemente no plano de code review anterior.
+
+---
+
+## Status de Execução (concluído)
+
+Branch: `feature/inject-agent`. Suíte verde em cada commit; `gofmt`, `go vet` e `go test -race` limpos ao final.
+
+| Commit | Escopo |
+|---|---|
+| `docs(planning)` | Registro deste plano |
+| `feat(api)` | Wire format do canal (`inject.proto`) |
+| `feat(config)` | `bridge.tags` + `routing.inject` e validação |
+| `feat(inject)` | Codec HMAC, anti-replay, derivação de grupo, carga de PSK |
+| `feat(netlink)` | `AddrManager` genérico, protocolo 98 |
+| `feat(routepolicy)` | Política de import extraída para pacote folha |
+| `feat(observability)` | Métricas do canal de injeção |
+| `feat(inject)` | Publisher por bridge marcada |
+| `feat(reconciler)` | `multicast_querier` nas bridges do canal |
+| `feat(routing)` | `export.tags` (communities) |
+| `refactor(inject)` | Socket multicast aberto sob demanda |
+| `feat(nnetd)` | Wiring do publisher |
+| `feat(agentconfig)` | Esquema e loader do agente |
+| `refactor(netlink)` | `Sync` com protocolo; fim dos `fmt.Printf` |
+| `feat(inject)` | Listener multicast |
+| `feat(observability)` | Métricas do agente + `StartHTTP` |
+| `feat(agent)` | Estado por controller e reconciliação de rotas |
+| `refactor(api)` | Wire format do inject em pacote Go próprio |
+| `feat(agent)` | Binário `nnet-agent` |
+| `feat(packaging)` | Pacote `n-netman-agent` |
+| `feat(cli)` | `nnet inject status` |
+| `fix(inject)` | Corrida no fechamento do socket do listener |
+| `test(agent)` | Testes de integração do caminho de kernel |
+| `test(lab)` | Canal de injeção no lab Vagrant |
+| `docs` | `inject.md`, `agent.md`, diagramas e atualizações |
+
+### Desvios em relação ao plano aprovado
+
+1. **`internal/routepolicy` (novo).** O plano previa expor `evalImportPolicy` em `internal/routing`, mas esse pacote importa `internal/controlplane` e arrastaria o gRPC para dentro da VM. A lógica foi extraída para um pacote folha, sem dependências externas, consumido pelos dois lados.
+
+2. **`api/inject/v1` (pacote próprio).** Gerar `inject.proto` dentro de `api/v1` colocava as mensagens ao lado dos stubs gRPC, e o agente linkava o runtime gRPC só para fazer parse de um datagrama UDP. Com o pacote separado o binário caiu de 23,0 MB para 20,0 MB e não contém mais gRPC.
+
+3. **`export.tags` (fora do escopo original).** `Route.Tags` existia no wire format mas nunca era populado, então `route_tags` seria configuração morta — filtraria sempre zero rotas. Exports passaram a declarar communities, completando a ponta.
+
+4. **Uma rota por prefixo, sem ECMP.** O plano previa instalar rotas concorrentes com métricas iguais como entradas distintas. O kernel mantém uma rota por destino por tabela, então o agente escolhe: menor métrica vence, empate desempata por next-hop de forma estável. Balanceamento exigiria rotas multipath e ficou fora.
+
+5. **`RouteManager.Sync` mudou de assinatura.** Fixava o protocolo do controller, o que impediria o agente de usá-lo. Passou a receber o protocolo. Não tinha chamador, então a mudança foi segura.
+
+6. **`accept_default_gateway` não passa pela allow-list.** O plano tratava o default como uma rota comum sujeita à política. Na prática, uma allow-list listando só os prefixos desejados descartaria o gateway em silêncio e faria o flag parecer quebrado. O flag governa a rota default sozinho; a allow/deny continua governando os prefixos específicos.
+
+7. **Tabela `main` resolvida explicitamente.** `table: 0` é `RT_TABLE_UNSPEC`: o kernel escreve na main, mas a leitura retorna todas as tabelas. O agente resolve 0 para 254 para que leitura e escrita concordem.
+
+### Achados durante a execução
+
+- **Corrida de dados no `Listener`** (corrigida): `Close` era alcançado por duas goroutines — o watchdog de contexto e o próprio `Run` — sem sincronização, e o loop de leitura desreferenciava a conexão enquanto a outra a anulava. Estava no caminho normal de shutdown, ou seja, toda parada do agente podia acertá-la. Encontrada pelo race detector sob os testes de integração.
+- **`nfpm` sem `ids`**: o pacote do controller passaria a levar o `nnet-agent` junto, colocando um daemon de VM em cada hypervisor. Ambos os pacotes agora são escopados.
+
+### Verificação executada
+
+- `go test -race ./...` — verde.
+- `make test-integration-netns` — 7 testes de integração passando com race detector, em network namespace sem root.
+- **Ponta a ponta real**: `inject.Publisher` numa bridge Linux com socket multicast real → binário `nnet-agent` num netns separado. O agente aplicou o endereço estático, instalou as rotas anunciadas com protocolo 98, excluiu a rota cuja community não casava com `route_tags`, e retirou tudo no shutdown.
+- `goreleaser release --snapshot` — o `.deb` do controller contém apenas `nnetd` e `nnet`; o do agente apenas `nnet-agent`, com `/etc/n-netman/psk` em 0700.
+
+### Não verificado
+
+- Renderização dos diagramas PlantUML: não há PlantUML local e o proxy precisa de URL pública. A sintaxe foi conferida (blocos balanceados, sem tags `<...>` ambíguas), mas os diagramas só serão renderizados de fato após o push.
+- Lab Vagrant: as VMs nunca foram criadas nesta máquina. As mudanças no `Vagrantfile` estão travadas pelo teste de regressão `TestLoader_Load_VagrantStyleV2`, mas o `vagrant up` completo não foi executado.
