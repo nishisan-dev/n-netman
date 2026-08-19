@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package nnetman.v1;
+
+option go_package = "github.com/nishisan-dev/n-netman/api/v1;nnetmanv1";
+
+// The inject channel carries route information from a controller (nnetd) to
+// agents running inside VMs attached to a tagged bridge. Unlike the NNetMan
+// service, which is unicast gRPC between hosts, these messages travel as
+// authenticated UDP datagrams on a per-VNI multicast group scoped to a single
+// L2 segment (TTL 1).
+
+// InjectEnvelope is the authenticated container that travels on the wire.
+// The payload is only parsed after the MAC has been verified.
+message InjectEnvelope {
+  // Protocol version. Receivers drop envelopes with an unknown version
+  // without parsing the payload.
+  uint32 version = 1;
+
+  // Identifies which pre-shared key produced the MAC, so keys can be rotated
+  // without a flag day.
+  string key_id = 2;
+
+  // Serialized Advertisement.
+  bytes payload = 3;
+
+  // HMAC-SHA256 over a domain-separated concatenation of version, key_id and
+  // payload. See internal/inject.Seal for the exact preimage.
+  bytes mac = 4;
+}
+
+// Advertisement is what a controller publishes for one bridge segment.
+message Advertisement {
+  // node.id of the publishing controller. Agents keep per-controller state
+  // because a single L2 segment spans every host participating in the overlay.
+  string controller_id = 1;
+
+  // VNI of the overlay this segment belongs to.
+  uint32 vni = 2;
+
+  // Overlay name, for diagnostics.
+  string segment = 3;
+
+  // Tags configured on the bridge. Agents match these against expect_tags.
+  repeated string tags = 4;
+
+  // Publish time (Unix millis), used together with sequence for replay
+  // rejection.
+  int64 timestamp_ms = 5;
+
+  // Monotonic per-controller counter, reset when the controller restarts.
+  uint64 sequence = 6;
+
+  // Identifies one complete route set. Reserved for future fragmentation of
+  // advertisements that outgrow a single datagram.
+  uint64 generation = 7;
+
+  // How long an agent keeps these routes without a refresh.
+  uint32 lease_seconds = 8;
+
+  // Routes to install.
+  repeated InjectedRoute routes = 9;
+
+  // Optional default gateway for the segment. Empty means none is offered.
+  // Agents install it only when the interface opts in.
+  string default_gateway = 10;
+}
+
+// InjectedRoute is a single prefix an agent should install.
+message InjectedRoute {
+  // Destination in CIDR notation (e.g. "172.16.10.0/24").
+  string prefix = 1;
+
+  // Next-hop address, normally the controller's address on the segment.
+  string next_hop = 2;
+
+  // Route metric (lower is better).
+  uint32 metric = 3;
+}
