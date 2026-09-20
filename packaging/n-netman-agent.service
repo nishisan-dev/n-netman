@@ -1,0 +1,32 @@
+[Unit]
+Description=n-netman VM Agent
+Documentation=https://github.com/nishisan-dev/n-netman
+# Runs after the local network configuration has been applied, since the agent
+# adds to what netplan set up rather than replacing it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nnet-agent run -c /etc/n-netman/agent.yaml
+Restart=always
+RestartSec=5
+
+# Unlike n-netman.service, the agent never writes to /etc/systemd nor calls
+# systemctl. It runs as root to read the root-owned PSK, with capabilities
+# limited to network administration and a read-only filesystem.
+User=root
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

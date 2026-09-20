@@ -32,6 +32,35 @@ type NodeStatus struct {
 	Uptime string                `json:"uptime"`
 	Peers  map[string]PeerStatus `json:"peers"`
 	Routes RouteStats            `json:"routes"`
+	// Inject is present only when the injection channel is enabled.
+	Inject []InjectSegmentStatus `json:"inject,omitempty"`
+}
+
+// InjectSegmentStatus reports one bridge's advertisement, as produced by
+// inject.Publisher.Status. It is duplicated as a plain struct so this package
+// does not depend on internal/inject.
+type InjectSegmentStatus struct {
+	Segment        string    `json:"segment"`
+	VNI            uint32    `json:"vni"`
+	Bridge         string    `json:"bridge"`
+	Tags           []string  `json:"tags"`
+	Group          string    `json:"group"`
+	Port           int       `json:"port"`
+	RulesMatched   int       `json:"rules_matched"`
+	Routes         int       `json:"routes"`
+	DefaultGateway string    `json:"default_gateway,omitempty"`
+	Sequence       uint64    `json:"sequence"`
+	LastPublished  time.Time `json:"last_published,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+}
+
+// InjectStatusProvider optionally reports the injection channel's state.
+//
+// It is separate from StatusProvider because the two are implemented by
+// different components: peers come from the control plane client, segments from
+// the publishers.
+type InjectStatusProvider interface {
+	GetInjectStatus() []InjectSegmentStatus
 }
 
 // RouteStats contains route statistics.
@@ -72,6 +101,13 @@ type Metrics struct {
 	// Control plane metrics
 	GRPCRequestsTotal   *prometheus.CounterVec
 	GRPCRequestDuration *prometheus.HistogramVec
+
+	// Inject channel metrics (controller side). Labelled by VNI because a host
+	// publishes an independent advertisement per tagged bridge.
+	InjectAdvertisementsSent *prometheus.CounterVec
+	InjectPublishErrors      *prometheus.CounterVec
+	InjectRoutesAdvertised   *prometheus.GaugeVec
+	InjectLastAdvertisement  *prometheus.GaugeVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics.
@@ -149,6 +185,26 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help:      "Duration of gRPC requests",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"method"}),
+		InjectAdvertisementsSent: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "nnetman",
+			Name:      "inject_advertisements_sent_total",
+			Help:      "Total number of inject advertisements published",
+		}, []string{"vni"}),
+		InjectPublishErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "nnetman",
+			Name:      "inject_publish_errors_total",
+			Help:      "Total number of inject advertisements that could not be published",
+		}, []string{"vni", "reason"}),
+		InjectRoutesAdvertised: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "nnetman",
+			Name:      "inject_routes_advertised",
+			Help:      "Number of routes in the most recent advertisement",
+		}, []string{"vni"}),
+		InjectLastAdvertisement: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "nnetman",
+			Name:      "inject_last_advertisement_timestamp_seconds",
+			Help:      "Timestamp of the last published advertisement",
+		}, []string{"vni"}),
 	}
 
 	// Register all metrics. If a collector is already registered (e.g. the
@@ -168,6 +224,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m.RoutesImported = registerOrExisting(reg, m.RoutesImported)
 	m.GRPCRequestsTotal = registerOrExisting(reg, m.GRPCRequestsTotal)
 	m.GRPCRequestDuration = registerOrExisting(reg, m.GRPCRequestDuration)
+	m.InjectAdvertisementsSent = registerOrExisting(reg, m.InjectAdvertisementsSent)
+	m.InjectPublishErrors = registerOrExisting(reg, m.InjectPublishErrors)
+	m.InjectRoutesAdvertised = registerOrExisting(reg, m.InjectRoutesAdvertised)
+	m.InjectLastAdvertisement = registerOrExisting(reg, m.InjectLastAdvertisement)
 
 	return m
 }
@@ -196,6 +256,7 @@ type Server struct {
 	metricsServer  *http.Server
 	healthServer   *http.Server
 	statusProvider StatusProvider
+	injectProvider InjectStatusProvider
 
 	mu         sync.RWMutex
 	healthy    bool
@@ -220,6 +281,13 @@ func (s *Server) SetStatusProvider(provider StatusProvider) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statusProvider = provider
+}
+
+// SetInjectStatusProvider registers the injection channel's status source.
+func (s *Server) SetInjectStatusProvider(provider InjectStatusProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.injectProvider = provider
 }
 
 // SetHealthFunc registers a predicate that reflects the daemon's real health
@@ -250,6 +318,35 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// StartHTTP starts an HTTP server with the timeout policy every listener in the
+// project shares, and logs its lifecycle.
+//
+// It is exported so nnet-agent can expose the same endpoints without depending
+// on the controller's configuration schema.
+func StartHTTP(name, addr string, handler http.Handler, logger *slog.Logger) *http.Server {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	go func() {
+		logger.Info(name+" server started", "address", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error(name+" server error", "error", err)
+		}
+	}()
+
+	return srv
+}
+
+// MetricsHandler returns the Prometheus handler, so callers do not need to
+// import promhttp directly.
+func MetricsHandler() http.Handler { return promhttp.Handler() }
+
 func (s *Server) startMetricsServer() error {
 	addr := fmt.Sprintf("%s:%d",
 		s.cfg.Observability.Metrics.Listen.Address,
@@ -259,21 +356,7 @@ func (s *Server) startMetricsServer() error {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 
-	s.metricsServer = &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	go func() {
-		s.logger.Info("metrics server started", "address", addr)
-		if err := s.metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("metrics server error", "error", err)
-		}
-	}()
+	s.metricsServer = StartHTTP("metrics", addr, mux, s.logger)
 
 	return nil
 }
@@ -290,21 +373,7 @@ func (s *Server) startHealthServer() error {
 	mux.HandleFunc("/livez", s.handleLive)
 	mux.HandleFunc("/status", s.handleStatus)
 
-	s.healthServer = &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	go func() {
-		s.logger.Info("health server started", "address", addr)
-		if err := s.healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("health server error", "error", err)
-		}
-	}()
+	s.healthServer = StartHTTP("health", addr, mux, s.logger)
 
 	return nil
 }
@@ -352,6 +421,7 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	provider := s.statusProvider
+	injectProvider := s.injectProvider
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -382,6 +452,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		for _, o := range s.cfg.GetOverlays() {
 			status.Routes.Exported += len(o.Routing.Export.Networks)
 		}
+	}
+
+	if injectProvider != nil {
+		status.Inject = injectProvider.GetInjectStatus()
 	}
 
 	data, err := json.Marshal(status)

@@ -277,7 +277,36 @@ func (r *Reconciler) reconcileBridgeForOverlay(ctx context.Context, overlay conf
 		}
 	}
 
+	r.reconcileMulticastQuerier(overlay)
+
 	return nil
+}
+
+// reconcileMulticastQuerier makes the host the IGMP querier on bridges that
+// carry the injection channel.
+//
+// Without a querier, snooping ages the group out and the bridge stops
+// forwarding advertisements to the VMs — the channel goes quiet with nothing
+// obviously broken. A failure here does not fail the overlay, because the
+// bridge and the overlay itself are still correct; it is reported with the
+// manual workaround so the operator can act on it.
+func (r *Reconciler) reconcileMulticastQuerier(overlay config.OverlayDef) {
+	if !r.cfg.Routing.Inject.Enabled {
+		return
+	}
+	if len(r.cfg.Routing.Inject.MatchingRules(overlay.Bridge.Tags)) == 0 {
+		return
+	}
+
+	bridgeName := overlay.Bridge.Name
+	if err := r.bridge.SetMulticastQuerier(bridgeName, true); err != nil {
+		r.logger.Warn("could not enable the multicast querier on an injecting bridge; advertisements may stop reaching VMs once snooping ages the group out",
+			"bridge", bridgeName,
+			"workaround", "set multicast_querier=1 or multicast_snooping=0 on the bridge",
+			"error", err)
+		return
+	}
+	r.logger.Debug("multicast querier enabled for injection", "bridge", bridgeName)
 }
 
 // reconcileVXLANForOverlay ensures the VXLAN interface for an overlay exists and is attached to the bridge.

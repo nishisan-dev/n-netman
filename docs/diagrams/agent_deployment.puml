@@ -1,0 +1,47 @@
+@startuml
+title Deployment do nnet-agent
+
+skinparam componentStyle rectangle
+
+node "Host A (baremetal)" {
+    component "nnetd\n(controller)" as NNETDA
+    component "br-prod\n10.100.0.1/24\ntags: [it, external]" as BRA
+    component "vxlan-prod\nVNI 100" as VXA
+
+    NNETDA -down-> BRA : publica\n239.8.0.100:4790\nTTL=1
+    BRA -down- VXA
+
+    node "VM a1" {
+        component "nnet-agent" as AGA
+        component "ens3\n10.100.0.50/24" as NICA
+        AGA -down-> NICA : aplica IP fixo\ne rotas (proto 98)
+    }
+    BRA -down- NICA
+}
+
+node "Host B (baremetal)" {
+    component "nnetd\n(controller)" as NNETDB
+    component "br-prod\n10.100.0.2/24\ntags: [it, external]" as BRB
+    component "vxlan-prod\nVNI 100" as VXB
+
+    NNETDB -down-> BRB : publica\n239.8.0.100:4790
+    BRB -down- VXB
+
+    node "VM b1" {
+        component "nnet-agent" as AGB
+        component "ens3\n10.100.0.51/24" as NICB
+        AGB -down-> NICB
+    }
+    BRB -down- NICB
+}
+
+VXA -right- VXB : underlay UDP 4789
+
+note bottom
+  O segmento L2 atravessa os dois hosts pelo VXLAN, então o anúncio
+  multicast do host A também chega à VM b1. Por isso o agente mantém
+  estado por controller_id, com lease independente: quando o nnetd do
+  host A para, apenas as rotas dele expiram.
+end note
+
+@enduml

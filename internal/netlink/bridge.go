@@ -3,6 +3,8 @@ package netlink
 import (
 	"fmt"
 	"net"
+	"os"
+	"strings"
 
 	"github.com/vishvananda/netlink"
 )
@@ -187,32 +189,49 @@ func (m *BridgeManager) RemoveInterface(ifaceName string) error {
 // AddAddress adds an IP address to a bridge interface.
 // The address should be in CIDR format, e.g. "10.100.0.1/24".
 func (m *BridgeManager) AddAddress(bridgeName, cidr string) error {
-	link, err := netlink.LinkByName(bridgeName)
-	if err != nil {
-		return fmt.Errorf("bridge %s not found: %w", bridgeName, err)
+	return NewAddrManager().Ensure(bridgeName, cidr)
+}
+
+// bridgeSysfsPath is where the kernel exposes per-bridge multicast knobs.
+const bridgeSysfsPath = "/sys/class/net/%s/bridge/%s"
+
+// SetMulticastQuerier turns the bridge into an IGMP querier.
+//
+// This matters for any application multicast carried on the bridge. With
+// multicast snooping on (the kernel default) and no querier present on the
+// segment, learned groups age out and the bridge stops forwarding them, so a
+// steady stream of advertisements simply stops arriving. Making the host the
+// querier keeps the group memberships refreshed.
+//
+// The knob lives in sysfs rather than netlink, so this writes the file directly.
+func (m *BridgeManager) SetMulticastQuerier(bridgeName string, enabled bool) error {
+	return writeBridgeSysfs(bridgeName, "multicast_querier", enabled)
+}
+
+// SetMulticastSnooping enables or disables IGMP snooping on the bridge.
+func (m *BridgeManager) SetMulticastSnooping(bridgeName string, enabled bool) error {
+	return writeBridgeSysfs(bridgeName, "multicast_snooping", enabled)
+}
+
+func writeBridgeSysfs(bridgeName, knob string, enabled bool) error {
+	path := fmt.Sprintf(bridgeSysfsPath, bridgeName, knob)
+
+	value := []byte("0\n")
+	if enabled {
+		value = []byte("1\n")
 	}
 
-	addr, err := netlink.ParseAddr(cidr)
-	if err != nil {
-		return fmt.Errorf("invalid address %s: %w", cidr, err)
-	}
-
-	// Check if address already exists
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
-	if err != nil {
-		return fmt.Errorf("failed to list addresses on %s: %w", bridgeName, err)
-	}
-
-	for _, a := range addrs {
-		if a.IPNet.String() == addr.IPNet.String() {
-			// Address already exists
+	// Skip the write when the knob already holds the desired value, so an
+	// unprivileged read-only check does not fail a reconciliation that has
+	// nothing to change.
+	if current, err := os.ReadFile(path); err == nil {
+		if strings.TrimSpace(string(current)) == strings.TrimSpace(string(value)) {
 			return nil
 		}
 	}
 
-	// Add the address
-	if err := netlink.AddrAdd(link, addr); err != nil {
-		return fmt.Errorf("failed to add address %s to %s: %w", cidr, bridgeName, err)
+	if err := os.WriteFile(path, value, 0o200); err != nil {
+		return fmt.Errorf("failed to set %s on bridge %s: %w", knob, bridgeName, err)
 	}
 
 	return nil

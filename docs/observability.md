@@ -168,6 +168,35 @@ groups:
 
 ---
 
+## Métricas do Canal de Injeção
+
+Exportadas pelo `nnetd` quando `routing.inject.enabled` é verdadeiro. Ver [inject.md](inject.md).
+
+| Métrica | Tipo | Labels | Descrição |
+|---|---|---|---|
+| `nnetman_inject_advertisements_sent_total` | counter | `vni` | Anúncios publicados |
+| `nnetman_inject_publish_errors_total` | counter | `vni`, `reason` | Ciclos que não publicaram (`build`, `seal`, `send`) |
+| `nnetman_inject_routes_advertised` | gauge | `vni` | Rotas no último anúncio |
+| `nnetman_inject_last_advertisement_timestamp_seconds` | gauge | `vni` | Momento do último anúncio |
+
+O endpoint `/status` do daemon ganha um bloco `inject` com, por bridge, as tags, o grupo, quantas regras casaram e o conteúdo do último anúncio. É o que o `nnet inject status` renderiza.
+
+## Métricas do nnet-agent
+
+Exportadas pelo agente dentro da VM, na porta 9111 por default. Ver [agent.md](agent.md).
+
+| Métrica | Tipo | Labels | Descrição |
+|---|---|---|---|
+| `nnetman_agent_advertisements_received_total` | counter | `interface` | Anúncios aceitos |
+| `nnetman_agent_advertisements_rejected_total` | counter | `interface`, `reason` | Anúncios descartados |
+| `nnetman_agent_routes_installed` | gauge | `interface` | Rotas programadas |
+| `nnetman_agent_controllers_active` | gauge | `interface` | Controllers com lease vivo |
+| `nnetman_agent_last_advertisement_timestamp_seconds` | gauge | `interface` | Último anúncio aceito |
+| `nnetman_agent_route_sync_errors_total` | counter | `interface` | Falhas ao programar o kernel |
+
+O label `reason` (`bad_mac`, `unknown_key`, `bad_version`, `replay`, `stale_timestamp`, `malformed`, `oversized`, `tag_mismatch`, `policy`) é o que distingue um canal em silêncio de um canal sendo ativamente rejeitado.
+
+
 ## Healthchecks
 
 Endpoints HTTP para verificação de saúde.

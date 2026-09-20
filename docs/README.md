@@ -17,6 +17,7 @@ Documentação completa do n-netman, um agente leve para overlays VXLAN L3/L2 em
 |-----------|-----------|
 | [network-model.md](network-model.md) | VXLAN como L2 carrier, bridges Linux, onde ocorre L3 |
 | [routing.md](routing.md) | Export/import de rotas, métricas, leases, conceito de transit |
+| [inject.md](inject.md) | Injeção de rotas nas VMs: tags de segmento, canal multicast, segurança |
 | [topology.md](topology.md) | Modos direct-preferred, full-mesh, hub-spoke |
 
 ### Referência
@@ -27,6 +28,7 @@ Documentação completa do n-netman, um agente leve para overlays VXLAN L3/L2 em
 | [cli.md](cli.md) | Comandos disponíveis e exemplos de uso |
 | [observability.md](observability.md) | Logs, métricas, healthchecks e troubleshooting |
 | [libvirt.md](libvirt.md) | Integração com KVM/libvirt para attach de VMs |
+| [agent.md](agent.md) | nnet-agent: instalação e operação dentro da VM |
 
 ## Quick Start
 
@@ -49,6 +51,8 @@ sudo nnet -c /etc/n-netman/n-netman.yaml apply
 sudo nnetd -config /etc/n-netman/n-netman.yaml
 ```
 
+Para que as VMs recebam rotas automaticamente, veja [inject.md](inject.md) (lado do controller) e [agent.md](agent.md) (lado da VM).
+
 ## Diagramas
 
 Os diagramas de arquitetura estão em [diagrams/](diagrams/):
@@ -58,6 +62,8 @@ Os diagramas de arquitetura estão em [diagrams/](diagrams/):
 - `route-exchange.puml` — Troca de rotas entre peers
 - `topology.puml` — Topologia de rede
 - `libvirt_integration.puml` — Fluxo de integração com libvirt
+- `inject_flow.puml` — Canal de injeção de rotas, do controller à VM
+- `agent_deployment.puml` — Deployment do nnet-agent nas VMs
 
 ## Convenções
 

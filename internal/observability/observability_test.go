@@ -61,3 +61,31 @@ func TestHandleHealth_ComposesFlagAndPredicate(t *testing.T) {
 		t.Fatalf("expected 503 when manual flag is false, got %d", got)
 	}
 }
+
+func TestNewAgentMetrics_DuplicateRegistrationReusesCollectors(t *testing.T) {
+	reg := prometheus.NewRegistry()
+
+	first := NewAgentMetrics(reg)
+	second := NewAgentMetrics(reg)
+
+	// The second construction must reuse the registered collectors rather than
+	// panicking or returning ones wired to nothing.
+	first.AdvertisementsReceived.WithLabelValues("ens3").Inc()
+	second.AdvertisementsReceived.WithLabelValues("ens3").Inc()
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+
+	for _, f := range families {
+		if f.GetName() != "nnetman_agent_advertisements_received_total" {
+			continue
+		}
+		if got := f.GetMetric()[0].GetCounter().GetValue(); got != 2 {
+			t.Fatalf("expected both increments on one collector, got %v", got)
+		}
+		return
+	}
+	t.Fatal("agent metric was not registered")
+}

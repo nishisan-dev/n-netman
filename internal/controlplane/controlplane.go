@@ -287,6 +287,7 @@ func (s *Server) LoadLocalRoutes() {
 			route := Route{
 				Prefix: network,
 				Metric: uint32(overlay.Routing.Export.Metric),
+				Tags:   overlay.Routing.Export.Tags,
 				VNI:    uint32(overlay.VNI),
 				PeerID: "", // Empty = local route
 			}

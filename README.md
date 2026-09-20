@@ -1,6 +1,6 @@
 # n-netman — Nishi Network Manager
 
-[![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-Nishi--NC-orange.svg)](LICENSE)
 
 **n-netman** é um agente leve para criação e gerenciamento de **overlays VXLAN L3/L2** entre hosts Linux rodando KVM/libvirt.
@@ -17,7 +17,7 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ **Troca de rotas via gRPC** (ExchangeState, AnnounceRoutes, WithdrawRoutes)
 - ✅ Instalação automática de rotas recebidas no kernel (server e client)
 - ✅ **Políticas de import aplicadas** (`allow`/`deny`/`accept_all`) — default seguro (nega)
-- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`, `cert`, `libvirt`, `version`
+- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`, `cert`, `libvirt`, `inject`, `version`
 - ✅ Carregamento/validação de config YAML (`version` obrigatória, duplicatas detectadas)
 - ✅ Healthchecks HTTP e métricas Prometheus populadas em runtime
 - ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
@@ -28,6 +28,9 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 - ✅ **TLS/mTLS** — CA obrigatória, verificação do servidor e identidade do peer pelo certificado
 - ✅ **Policy-Based Routing** — Rotas instaladas em tabelas específicas por VNI
 - ✅ **Integração libvirt** — Attach/detach de VMs via `nnet libvirt`
+- ✅ **Injeção de rotas nas VMs** — o controller publica rotas num grupo multicast na bridge, selecionando o que anunciar por tags do segmento (`routing.inject`)
+- ✅ **Agente nas VMs (`nnet-agent`)** — binário e pacote próprios; aplica IP estático e programa as rotas recebidas (protocolo 98), com lease independente por controller
+- ✅ **Communities nas rotas** (`export.tags`) — viajam até os peers e filtram o que é injetado em cada segmento
 
 ### Em progresso
 
@@ -37,7 +40,10 @@ Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e
 
 - ❌ Export estendido (`export_all`, `include_connected`, `include_netplan_static`) — export usa só `networks`
 - ❌ `lookup_rules.mode: prefix` (apenas `interface` implementado)
-- ❌ Validação de PSK entre peers
+- ❌ Validação de PSK entre peers (o canal de injeção **usa** PSK; a troca gRPC entre peers, não)
+- ❌ IP dinâmico no `nnet-agent` — a fase 1 é apenas endereço estático
+- ❌ DNS, search domain e MTU no anúncio de injeção
+- ❌ Fragmentação de anúncio — um anúncio precisa caber em 1400 bytes
 
 ---
 
@@ -59,7 +65,7 @@ sudo modprobe bridge
 ```
 
 ### Build
-- Go 1.23 ou superior
+- Go 1.26 ou superior (CI e laboratório usam Go 1.26.8)
 
 ```bash
 # Verificar versão do Go
@@ -694,6 +700,18 @@ Fonte: `docs/diagrams/route-exchange.puml`
 Fonte: `docs/diagrams/topology.puml`
 
 ![Topologia de rede](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/topology.puml)
+
+### Canal de Injeção de Rotas
+
+Fonte: `docs/diagrams/inject_flow.puml`
+
+![Injecao de rotas nas VMs](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/inject_flow.puml)
+
+### Deployment do nnet-agent
+
+Fonte: `docs/diagrams/agent_deployment.puml`
+
+![Deployment do agente](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/agent_deployment.puml)
 
 ---
 

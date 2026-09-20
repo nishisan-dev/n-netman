@@ -106,8 +106,10 @@ routing:
     include_connected: true
     include_netplan_static: true
     metric: 100
-    # tags/policies futuras:
-    # communities: ["lab", "prod-like"]
+    # Communities anexadas a cada rota exportada. As regras de routing.inject
+    # filtram por elas via route_tags.
+    tags:
+      - "lab"
 
   # Importação de rotas (o que este nó aceita aprender)
   import:

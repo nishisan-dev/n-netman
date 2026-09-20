@@ -160,6 +160,11 @@ func (l *Loader) validateSemantics(cfg *Config) error {
 		}
 	}
 
+	// Validate the inject channel and the bridge tags it selects on.
+	if err := validateInject(cfg); err != nil {
+		return err
+	}
+
 	// Validate VXLAN bridge reference exists in KVM bridges (if KVM enabled)
 	// Only for v1 configs - v2 would need to check each overlay
 	if cfg.Version == 1 && cfg.KVM.Enabled && len(cfg.KVM.Bridges) > 0 {
@@ -198,6 +203,88 @@ func (l *Loader) validateSemantics(cfg *Config) error {
 		} {
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				return fmt.Errorf("TLS %s not found: %s", name, path)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateInject checks the inject channel configuration and the bridge tags
+// it selects on. Tags are validated even when inject is disabled so a typo does
+// not lie dormant until the channel is switched on.
+func validateInject(cfg *Config) error {
+	// Bridge tags must be unique: duplicates make AND matching ambiguous to read.
+	for _, o := range cfg.GetOverlays() {
+		seen := make(map[string]struct{}, len(o.Bridge.Tags))
+		for _, t := range o.Bridge.Tags {
+			if t == "" {
+				return fmt.Errorf("overlay %q: bridge.tags contains an empty tag", o.Name)
+			}
+			if _, dup := seen[t]; dup {
+				return fmt.Errorf("overlay %q: duplicate bridge tag %q", o.Name, t)
+			}
+			seen[t] = struct{}{}
+		}
+	}
+
+	inject := &cfg.Routing.Inject
+	if !inject.Enabled {
+		return nil
+	}
+
+	if inject.PSKRef == "" {
+		return fmt.Errorf("routing.inject.enabled requires psk_ref")
+	}
+
+	// The group is derived by OR-ing the low 16 bits of the VNI into the last
+	// two octets, so the base must leave them free. Constraining the base this
+	// way makes the derivation provably stay inside the multicast range.
+	base := net.ParseIP(inject.GetGroupBase())
+	if base == nil {
+		return fmt.Errorf("routing.inject.group_base %q is not a valid IP", inject.GetGroupBase())
+	}
+	v4 := base.To4()
+	if v4 == nil {
+		return fmt.Errorf("routing.inject.group_base %q must be IPv4", inject.GetGroupBase())
+	}
+	if !base.IsMulticast() {
+		return fmt.Errorf("routing.inject.group_base %q is not a multicast address", inject.GetGroupBase())
+	}
+	if v4[2] != 0 || v4[3] != 0 {
+		return fmt.Errorf("routing.inject.group_base %q must end in 0.0; the last two octets carry the VNI", inject.GetGroupBase())
+	}
+
+	// A rule that advertises nothing is almost always a mistake.
+	for i, r := range inject.Rules {
+		if len(r.Networks) == 0 && !r.FromRIB && r.DefaultGateway == "" {
+			return fmt.Errorf("routing.inject.rules[%d]: rule advertises nothing (set networks, from_rib or default_gateway)", i)
+		}
+		for _, t := range r.MatchTags {
+			if t == "" {
+				return fmt.Errorf("routing.inject.rules[%d]: match_tags contains an empty tag", i)
+			}
+		}
+	}
+
+	// A bridge selected by a rule needs an address on the segment: it is the
+	// default next-hop advertised to the agents. Without it the injected routes
+	// would black-hole inside the VM.
+	for _, o := range cfg.GetOverlays() {
+		if len(o.Bridge.Tags) == 0 {
+			continue
+		}
+		matched := inject.MatchingRules(o.Bridge.Tags)
+		if len(matched) == 0 {
+			continue
+		}
+		if o.Bridge.IPv4 != "" {
+			continue
+		}
+		for _, r := range matched {
+			if r.NextHop == "" {
+				return fmt.Errorf("overlay %q: inject matches bridge %q but it has no bridge.ipv4 and rule has no next_hop; injected routes would have no valid next-hop",
+					o.Name, o.Bridge.Name)
 			}
 		}
 	}

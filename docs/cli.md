@@ -299,6 +299,44 @@ nnetd -version
 
 ---
 
+## nnet inject
+
+Inspeciona o canal de injeção de rotas. Ver [inject.md](inject.md).
+
+### nnet inject status
+
+Mostra, por bridge, as tags que ela carrega, o grupo em que publica, quantas regras de inject casaram e o conteúdo do último anúncio.
+
+```bash
+nnet inject status
+```
+
+```
+Inject channel: group base 239.8.0.0, port 4790, every 10s, lease 30s
+
+BRIDGE   VNI  TAGS           GROUP             RULES MATCHED
+br-prod  100  [it external]  239.8.0.100:4790  2
+br-mgmt  200  [mgmt]         239.8.0.200:4790  0
+```
+
+A parte de configuração funciona com o daemon parado, que é o caso mais útil: uma regra cuja `match_tags` ninguém carrega não anuncia nada e ainda assim parece saudável — aqui ela aparece com `RULES MATCHED` igual a zero.
+
+Com o daemon rodando, uma segunda tabela mostra rotas anunciadas, gateway, sequência, quando foi o último anúncio e o erro do último ciclo que falhou.
+
+## nnet-agent
+
+Binário separado, instalado **dentro da VM** pelo pacote `n-netman-agent`. Ver [agent.md](agent.md).
+
+```bash
+nnet-agent run      # executa em foreground (é o que a unit systemd chama)
+nnet-agent status   # o que o agente rodando aprendeu
+nnet-agent doctor   # verifica chave, interfaces e privilégios
+nnet-agent version
+```
+
+Flag global: `-c/--config` (default `/etc/n-netman/agent.yaml`).
+
+
 ## Exemplos de Uso
 
 ### Workflow Típico
