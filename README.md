@@ -1,6 +1,6 @@
 # n-netman — Nishi Network Manager
 
-[![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-Nishi--NC-orange.svg)](LICENSE)
 
 **n-netman** é um agente leve para criação e gerenciamento de **overlays VXLAN L3/L2** entre hosts Linux rodando KVM/libvirt.
@@ -65,7 +65,7 @@ sudo modprobe bridge
 ```
 
 ### Build
-- Go 1.23 ou superior
+- Go 1.26 ou superior (CI e laboratório usam Go 1.26.8)
 
 ```bash
 # Verificar versão do Go

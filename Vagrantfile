@@ -70,15 +70,15 @@ Vagrant.configure("2") do |config|
         apt-get update
         apt-get install -y build-essential iproute2 bridge-utils
 
-        # Instalar Go 1.23
-        if ! command -v go &> /dev/null; then
-          wget -q https://go.dev/dl/go1.23.0.linux-amd64.tar.gz
+        # Instalar ou atualizar o Go para a mesma versão usada no CI
+        export PATH=/usr/local/go/bin:$PATH
+        if [ "$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null)" != "go1.26.8" ]; then
+          wget -q https://go.dev/dl/go1.26.8.linux-amd64.tar.gz
           rm -rf /usr/local/go
-          tar -C /usr/local -xzf go1.23.0.linux-amd64.tar.gz
-          rm go1.23.0.linux-amd64.tar.gz
-          echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile.d/go.sh
+          tar -C /usr/local -xzf go1.26.8.linux-amd64.tar.gz
+          rm go1.26.8.linux-amd64.tar.gz
         fi
-        export PATH=$PATH:/usr/local/go/bin
+        echo 'export PATH=/usr/local/go/bin:$PATH' > /etc/profile.d/go.sh
 
         # Carregar módulos do kernel
         modprobe vxlan
@@ -119,7 +119,7 @@ Vagrant.configure("2") do |config|
       # Provisioning: build e config específica do nó
       vm.vm.provision "shell", inline: <<-SHELL
         set -e
-        export PATH=$PATH:/usr/local/go/bin
+        export PATH=/usr/local/go/bin:$PATH
         
         cd /home/vagrant/n-netman
         make build
