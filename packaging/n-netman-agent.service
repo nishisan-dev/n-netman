@@ -13,8 +13,8 @@ Restart=always
 RestartSec=5
 
 # Unlike n-netman.service, the agent never writes to /etc/systemd nor calls
-# systemctl, so it can be confined properly: no root, only the capabilities
-# needed to configure an address and program routes.
+# systemctl. It runs as root to read the root-owned PSK, with capabilities
+# limited to network administration and a read-only filesystem.
 User=root
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW

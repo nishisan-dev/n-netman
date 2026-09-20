@@ -12,8 +12,14 @@
 
 set -euo pipefail
 
-NS="${2:-vm1}"
-ADDR="${3:-10.100.0.50/24}"
+CLEANUP_ONLY=false
+if [ "${1:-}" = "--cleanup" ]; then
+    CLEANUP_ONLY=true
+    shift
+fi
+
+NS="${1:-vm1}"
+ADDR="${2:-10.100.0.50/24}"
 BRIDGE="br-prod"
 VETH_HOST="veth-${NS}"
 VETH_NS="${NS}-eth0"
@@ -28,7 +34,7 @@ cleanup() {
     echo "Done."
 }
 
-if [ "${1:-}" = "--cleanup" ]; then
+if [ "$CLEANUP_ONLY" = true ]; then
     cleanup
     exit 0
 fi

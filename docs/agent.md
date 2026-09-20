@@ -113,7 +113,7 @@ Isso limita o estrago de um controller comprometido: ele não consegue empurrar 
 
 A unit roda depois de `network-online.target`, porque o agente **acrescenta** ao que o netplan configurou em vez de substituí-lo. Se a NIC ainda não estiver pronta, o agente espera e tenta de novo em vez de morrer — perder essa corrida no boot não pode ser fatal.
 
-A unit é mais confinada que a do controller: o agente nunca escreve em `/etc/systemd` nem chama `systemctl`, então roda com apenas `CAP_NET_ADMIN` e `CAP_NET_RAW` sob `ProtectSystem=strict`.
+A unit é mais confinada que a do controller: o agente nunca escreve em `/etc/systemd` nem chama `systemctl`. Roda como root para ler a PSK protegida, com capabilities limitadas a `CAP_NET_ADMIN` e `CAP_NET_RAW` sob `ProtectSystem=strict`. O diagnóstico `doctor` verifica se `CAP_NET_ADMIN` está efetiva; o UID root, sozinho, não garante essa permissão.
 
 ## Múltiplos controllers
 

@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"net"
-	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 
 	"github.com/nishisan-dev/n-netman/internal/inject"
 )
@@ -33,12 +33,7 @@ routes.`,
 					return true, configPath
 				}},
 				{"Route privileges", func() (bool, string) {
-					// CAP_NET_ADMIN is what the packaged unit grants; running as
-					// root also satisfies it.
-					if os.Geteuid() != 0 {
-						return false, "programming routes needs CAP_NET_ADMIN (the packaged unit grants it)"
-					}
-					return true, "running as root"
+					return checkRoutePrivileges(unix.Capget)
 				}},
 			}
 
@@ -106,4 +101,20 @@ routes.`,
 			return nil
 		},
 	}
+}
+
+// Check the effective capability set: a non-root process can have NET_ADMIN,
+// while root in a container or restricted service can lack it.
+func checkRoutePrivileges(capget func(*unix.CapUserHeader, *unix.CapUserData) error) (bool, string) {
+	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	// Version 3 writes two 32-bit capability words, even when only the first
+	// word contains the capability being checked.
+	var caps [2]unix.CapUserData
+	if err := capget(&header, &caps[0]); err != nil {
+		return false, fmt.Sprintf("cannot read effective capabilities: %v", err)
+	}
+	if caps[unix.CAP_NET_ADMIN/32].Effective&(1<<uint(unix.CAP_NET_ADMIN%32)) == 0 {
+		return false, "programming routes needs effective CAP_NET_ADMIN (the packaged unit grants it)"
+	}
+	return true, "CAP_NET_ADMIN is effective"
 }
