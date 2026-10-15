@@ -131,6 +131,23 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 
 	r.logger.Debug("starting reconciliation")
 
+	if r.cfg.Version == 3 {
+		var errs []error
+		for _, t := range r.cfg.Transports {
+			if err := nlink.ReconcileTransport(t); err != nil {
+				errs = append(errs, fmt.Errorf("transport %s: %w", t.ID, err))
+			}
+		}
+		// Legacy overlays are opt-in in v3 and use the established reconciler.
+		for _, o := range r.cfg.GetOverlays() {
+			if err := r.reconcileOverlay(ctx, o); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		err := errors.Join(errs...)
+		r.setError(err)
+		return err
+	}
 	// Get all overlays (works for both v1 and v2 configs)
 	overlays := r.cfg.GetOverlays()
 	if len(overlays) == 0 {

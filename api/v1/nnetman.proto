@@ -32,6 +32,7 @@ message StateRequest {
   
   // Timestamp of the request (Unix millis)
   int64 timestamp_ms = 3;
+  SessionIdentity session = 4;
 }
 
 // StateResponse contains the peer's current state.
@@ -47,6 +48,8 @@ message StateResponse {
   
   // Whether the peer accepted our routes
   bool accepted = 4;
+  SessionIdentity session = 5;
+  SessionIdentity advertisement = 6;
 }
 
 // Route represents a network route announcement.
@@ -80,6 +83,7 @@ message RouteAnnouncement {
   
   // Timestamp of the announcement (Unix millis)
   int64 timestamp_ms = 3;
+  SessionIdentity session = 4;
 }
 
 // RouteWithdrawal notifies a peer that routes are being removed.
@@ -92,6 +96,7 @@ message RouteWithdrawal {
   
   // Timestamp of the withdrawal (Unix millis)
   int64 timestamp_ms = 3;
+  SessionIdentity session = 4;
 }
 
 // RouteAck acknowledges route announcements or withdrawals.
@@ -116,6 +121,7 @@ message KeepaliveRequest {
   
   // Timestamp (Unix millis)
   int64 timestamp_ms = 3;
+  SessionIdentity session = 4;
 }
 
 // KeepaliveResponse acknowledges a keepalive request.
@@ -131,6 +137,7 @@ message KeepaliveResponse {
   
   // Peer's current health status
   PeerHealth health = 4;
+  SessionIdentity session = 5;
 }
 
 // PeerHealth reports the current health status of a peer.
@@ -143,4 +150,12 @@ message PeerHealth {
   
   // Uptime in seconds
   uint64 uptime_seconds = 3;
+}
+
+// Session identity is scoped to a sender epoch; ACKs echo it exactly.
+message SessionIdentity {
+ string session_id = 1;
+ string transport_id = 2;
+ string epoch = 3;
+ uint64 generation = 4;
 }

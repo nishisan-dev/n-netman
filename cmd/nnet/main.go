@@ -43,6 +43,7 @@ It allows you to apply configurations, check status, and manage your VXLAN overl
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(applyCmd())
 	rootCmd.AddCommand(statusCmd())
+	rootCmd.AddCommand(peersCmd())
 	rootCmd.AddCommand(routesCmd())
 	rootCmd.AddCommand(doctorCmd())
 	rootCmd.AddCommand(injectCmd())
@@ -86,6 +87,9 @@ It creates/updates VXLAN interfaces, bridges, and FDB entries as needed.`,
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
+			}
+			if cfg.Version == 3 {
+				return transportApply(cfg, dryRun)
 			}
 
 			fmt.Printf("📋 Loading configuration from: %s\n", configPath)
@@ -142,6 +146,12 @@ func statusCmd() *cobra.Command {
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
+			}
+			if cfg.Version == 3 {
+				if err := transportStatus(cfg); err != nil {
+					return err
+				}
+				return transportRoutes(cfg)
 			}
 
 			fmt.Printf("🖥️  Node: %s (%s)\n\n", cfg.Node.ID, cfg.Node.Hostname)
@@ -379,6 +389,9 @@ func routesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cfg.Version == 3 {
+				return transportRoutes(cfg)
+			}
 
 			routingMgr := routing.NewManager(cfg)
 			overlays := cfg.GetOverlays()
@@ -462,6 +475,10 @@ func doctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Run diagnostics on the network and environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err == nil && cfg.Version == 3 {
+				return transportDoctor(cfg)
+			}
 			fmt.Println("🩺 Running n-netman diagnostics...")
 
 			checks := []struct {

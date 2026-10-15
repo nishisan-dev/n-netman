@@ -20,7 +20,8 @@ It is intended for homelabs, network labs, virtualization environments, and mult
 - **Distributed route exchange:** gRPC state synchronization, route announcements/withdrawals, import filters, and route leases.
 - **Virtualization integration:** libvirt attachment commands and an optional `nnet-agent` inside VMs.
 - **Operational visibility:** CLI diagnostics, peer status, JSON logs, HTTP health endpoints, and Prometheus metrics.
-- **Secure peering option:** TLS/mTLS with certificate-based peer identity.
+- **Transport-aware failover (v3):** independent, interface-bound sessions for an existing Ethernet pseudowire and a VXLAN backup.
+- **Secure peering:** TLS/mTLS with certificate-based peer identity; mTLS is required by default in v3.
 
 ### Capabilities at a glance
 
@@ -37,7 +38,7 @@ It is intended for homelabs, network labs, virtualization environments, and mult
 | Prometheus metrics, health checks, diagnostics | Available |
 | Automatic export of all connected / Netplan static routes | Not implemented |
 | `lookup_rules.mode: prefix` | Not implemented |
-| Transport-aware PW/VXLAN route failover | **Planned; not yet implemented** |
+| Transport-aware PW/VXLAN route failover | Available with configuration v3 |
 
 For implementation details and current limitations, see [Routing](docs/routing.md), [Configuration](docs/configuration.md), and [Architecture](docs/architecture.md).
 
@@ -77,6 +78,10 @@ The **underlay** is provided by Linux and your existing network configuration. T
 
 The project has been tested on Ubuntu 22.04+ and Debian 12+ according to its current project documentation.
 
+### Install a release
+
+Download the Linux amd64 controller package (`n-netman`) or optional VM agent package (`n-netman-agent`) from [GitHub Releases](https://github.com/nishisan-dev/n-netman/releases/latest). Releases also include tar archives and SHA256 checksums. Prebuilt binaries do not require Go on the target host.
+
 ### Build and inspect
 
 ```bash
@@ -95,7 +100,7 @@ The build produces three binaries:
 | Binary | Purpose |
 | --- | --- |
 | `nnetd` | Network controller / control-plane daemon |
-| `nnet` | CLI for apply, status, routes, doctor, certificates, and libvirt |
+| `nnet` | CLI for apply, status, peers, routes, doctor, certificates, and libvirt |
 | `nnet-agent` | Optional route agent for virtual machines |
 
 ### Configure an overlay
@@ -145,9 +150,9 @@ n-netman already implements a small, purpose-built **gRPC routing control plane*
 - Advertised prefixes are currently **explicitly listed** in the configuration (`export.networks`).
 - Import filters support `allow`, `deny`, and `accept_all`; the default policy is conservative.
 - Routes can use per-overlay routing tables and be withdrawn when a peer fails or a lease expires.
-- Peer health is currently checked by periodic RPCs; the existing `Keepalive` stream is **not yet** the active fast-failure detector.
+- With v1/v2, peer health uses periodic state RPCs. With v3, the active `Keepalive` stream checks application ACKs independently on each transport, with configurable failure and stable-recovery thresholds.
 
-**Do not assume sub-second convergence or production-grade BGP compatibility:** n-netman is not BGP, and it does not implement AS paths, full routing policy semantics, or dynamic transport failover today.
+n-netman is not BGP and does not implement AS paths or full BGP routing policy semantics. Failover timing follows the configured application heartbeat cycles and scheduling; it is not a sub-second SLA.
 
 Read the [Routing guide](docs/routing.md) for route semantics, protocol 99, import policies, and current restrictions.
 
@@ -173,16 +178,19 @@ See [KVM/libvirt integration](docs/libvirt.md), [Route injection](docs/inject.md
 
 Prometheus metrics include reconciliation activity, peer connectivity, active VXLAN/bridge resources, and imported/exported route counts. See [Observability](docs/observability.md) and [Configuration](docs/configuration.md).
 
-## Roadmap
+## Transport-aware routing (configuration v3)
 
-The following items are **proposals**, not currently released functionality:
+Use the complete [SP](configs/v3-t1-sp.yaml) and [RJ](configs/v3-t1-rj.yaml) examples for an existing Ethernet PW and a managed VXLAN backup. Replace the sample interfaces, VTEP addresses, and certificate paths before deployment. Configuration v1/v2 retains its previous behavior.
 
-- **Transport-aware peering:** bind a TCP/gRPC session to a specific local address and interface.
-- **Path health and hysteresis:** detect failure and stable recovery on each independent transport.
-- **Automatic route preference/failover:** prefer an external MPLS pseudowire/VLAN path, then move to a separately managed VXLAN backup when the primary fails.
-- **Routing-only mode:** exchange and manage routes without requiring n-netman to recreate existing KVM bridges or VLANs.
+- **External PW remains observe-only:** existing bonds, VLANs, KVM bridges, and TAPs are preserved. VXLAN/bridge/FDB management requires explicit ownership, and routing-only operation is supported.
+- **Control stays on its transport:** each gRPC/TCP session binds its source and device, validates the direct egress path, and uses application ACK deadlines with replay checks and recovery hysteresis.
+- **PW preferred, VXLAN backup:** authorized IPv4 candidates coexist in the same routing table with metrics 100/200. A failed session or withdrawn prefix removes only its own candidate.
+- **Conservative route ownership:** a durable journal and exact Netlink operations protect third-party routes, including unowned routes with protocol 99.
+- **mTLS and explicit prefix policies:** the peer certificate authenticates the node ID; imports default to deny, and next-hop/device/metric/table come from local policy.
 
-The goal is to reuse the current route manager, control plane, and VXLAN reconciler rather than introducing an additional routing daemon.
+The default PW policy detects three missed ACKs and requires ten consecutive valid ACKs for recovery. After a daemon crash, routes can remain until restart; the daemon removes journaled stale candidates before establishing health again. Keep its state file persistent and enable service restart.
+
+See the [v3 operations guide](docs/transport-failover.md) for configuration semantics, CLI diagnostics, metrics, limits, and the reproducible `make test-transport-netns` lab. The lab validates FIB and bidirectional TCP traffic with real mTLS, including blackholes with carrier UP, restart, and prevention of control leaking through the backup. It was run on Linux 6.8; validation on the target Linux 5.4 remains pending.
 
 ## Documentation
 
@@ -193,6 +201,7 @@ The goal is to reuse the current route manager, control plane, and VXLAN reconci
 | [Configuration](docs/configuration.md) | YAML options |
 | [Network model](docs/network-model.md) | VXLAN, L2/L3 overlays, and bridges |
 | [Routing](docs/routing.md) | gRPC route exchange, imports, and leases |
+| [Transport failover (v3)](docs/transport-failover.md) | PW/VXLAN peering, health, ownership, and SP/RJ examples |
 | [CLI](docs/cli.md) | `nnet` and `nnetd` commands |
 | [KVM/libvirt](docs/libvirt.md) | VM and bridge integration |
 | [Route injection](docs/inject.md) | Route advertisements to VMs |
@@ -208,6 +217,7 @@ Also see the [example configurations](examples/) and [lab test scripts](scripts/
 make build
 make test
 make test-coverage
+make test-transport-netns
 ```
 
 Integration tests are available through `make test-integration` (privileged network operations) and `make test-integration-netns` (user namespace support required).

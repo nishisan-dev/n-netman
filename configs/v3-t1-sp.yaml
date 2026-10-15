@@ -1,0 +1,118 @@
+# Documentation addresses: replace interfaces and VTEP IPs before deployment.
+version: 3
+state_file: /var/lib/n-netman/path-routes.json
+
+node:
+  id: t1-sp
+  hostname: t1-sp
+
+transports:
+  - id: pw-rj
+    type: external
+    managed: false
+    interface: br185
+    local_ip: 192.168.185.1
+    peer_ip: 192.168.185.3
+
+  - id: vxlan-rj
+    type: vxlan
+    managed: true
+    name: vxlan200
+    vni: 200
+    dstport: 4789
+    mtu: 1450
+    bridge:
+      name: br-vxlan200
+      managed: true
+      ipv4: 192.168.200.1/24
+    underlay:
+      interface: underlay0
+      local_vtep_ip: 198.51.100.11
+      remote_vtep_ip: 198.51.100.13
+    peer_ip: 192.168.200.3
+    bum:
+      mode: head-end-replication
+
+peers:
+  - id: t1-rj
+    sessions:
+      - id: pw
+        remote_session_id: pw
+        remote_transport_id: pw-sp
+        transport: pw-rj
+        protocol: grpc
+        listen_ip: 192.168.185.1
+        local_ip: 192.168.185.1
+        remote_ip: 192.168.185.3
+        port: 9898
+        bind_device: br185
+        health:
+          interval_ms: 1000
+          ack_timeout_ms: 700
+          down_after_misses: 3
+          up_after_successes: 10
+
+      - id: vxlan
+        remote_session_id: vxlan
+        remote_transport_id: vxlan-sp
+        transport: vxlan-rj
+        protocol: grpc
+        listen_ip: 192.168.200.1
+        local_ip: 192.168.200.1
+        remote_ip: 192.168.200.3
+        port: 9898
+        bind_device: br-vxlan200
+        health:
+          interval_ms: 1000
+          ack_timeout_ms: 700
+          down_after_misses: 3
+          up_after_successes: 5
+
+    routing:
+      export:
+        networks:
+          - 192.168.101.0/24
+      import:
+        accept_all: false
+        allow:
+          - 192.168.103.0/24
+        deny:
+          - 0.0.0.0/0
+
+route_policies:
+  - id: sp-to-rj
+    peer: t1-rj
+    prefix: 192.168.103.0/24
+    table: main
+    candidates:
+      - session: pw
+        via: 192.168.185.3
+        dev: br185
+        metric: 100
+      - session: vxlan
+        via: 192.168.200.3
+        dev: br-vxlan200
+        metric: 200
+
+security:
+  control_plane:
+    tls:
+      enabled: true
+      cert_file: /etc/n-netman/tls/t1-sp.crt
+      key_file: /etc/n-netman/tls/t1-sp.key
+      ca_file: /etc/n-netman/tls/ca.crt
+
+observability:
+  logging:
+    level: info
+    format: json
+  metrics:
+    enabled: true
+    listen:
+      address: 127.0.0.1
+      port: 9109
+  healthcheck:
+    enabled: true
+    listen:
+      address: 127.0.0.1
+      port: 9110

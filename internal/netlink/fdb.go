@@ -1,10 +1,9 @@
 package netlink
 
 import (
+	"errors"
 	"fmt"
 	"net"
-	"os/exec"
-	"strings"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -87,8 +86,10 @@ func (m *FDBManager) Delete(entry FDBEntry) error {
 	}
 
 	if err := netlink.NeighDel(neigh); err != nil {
-		// Ignore errors (entry might not exist).
-		return nil
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ESRCH) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete FDB entry: %w", err)
 	}
 
 	return nil
@@ -123,35 +124,14 @@ func (m *FDBManager) List(vxlanName string) ([]FDBEntry, error) {
 	return entries, nil
 }
 
-// AddPeer adds a remote VXLAN peer (VTEP) to the FDB.
-// This is a convenience method that adds an FDB entry with MAC 00:00:00:00:00:00
-// to enable flooding to this peer for unknown destinations.
-//
-// NOTE: We use 'bridge fdb append' command directly instead of vishvananda/netlink
-// library's NeighAppend due to a known issue where NeighAppend returns "operation
-// not supported" for VXLAN FDB entries when the VXLAN is attached to a bridge.
-// See: https://github.com/vishvananda/netlink/issues/714
-// The issue suggests using Family: AF_BRIDGE, Flags: NTF_SELF, State: NUD_PERMANENT,
-// but this combination still fails in some kernel versions/configurations.
+// AddPeer appends a permanent, device-self BUM entry using Netlink only.
+// NLM_F_APPEND permits the same zero MAC to fan out to multiple VTEPs.
 func (m *FDBManager) AddPeer(vxlanName string, remoteIP net.IP) error {
-	// Use bridge command directly - more reliable than netlink library for VXLAN FDB
-	// bridge fdb append 00:00:00:00:00:00 dev <vxlan> dst <remote_ip>
-	cmd := exec.Command("bridge", "fdb", "append",
-		"00:00:00:00:00:00",
-		"dev", vxlanName,
-		"dst", remoteIP.String())
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Check if it's a duplicate entry error (not really an error)
-		outputStr := string(output)
-		if strings.Contains(outputStr, "File exists") {
-			return nil // Entry already exists, that's fine
-		}
-		return fmt.Errorf("bridge fdb append failed: %s: %w", outputStr, err)
+	e := m.Add(FDBEntry{MAC: net.HardwareAddr{0, 0, 0, 0, 0, 0}, RemoteIP: remoteIP, VXLANName: vxlanName, Permanent: true})
+	if errors.Is(e, unix.EEXIST) {
+		return nil
 	}
-
-	return nil
+	return e
 }
 
 // DeletePeer removes a remote VXLAN peer (VTEP) from the FDB.
@@ -218,8 +198,7 @@ func (m *FDBManager) SyncPeers(vxlanName string, desiredPeers []net.IP) error {
 		}
 		if !desiredSet[entry.RemoteIP.String()] {
 			if err := m.DeletePeer(vxlanName, entry.RemoteIP); err != nil {
-				// Log but continue
-				fmt.Printf("warning: failed to remove stale peer %s: %v\n", entry.RemoteIP, err)
+				return fmt.Errorf("failed to remove stale peer %s: %w", entry.RemoteIP, err)
 			}
 		}
 	}

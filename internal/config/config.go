@@ -5,7 +5,10 @@ import "time"
 
 // Config is the root configuration structure for n-netman.
 type Config struct {
-	Version       int            `yaml:"version" validate:"required,min=1,max=2"`
+	Transports    []Transport    `yaml:"transports"`
+	RoutePolicies []RoutePolicy  `yaml:"route_policies"`
+	StateFile     string         `yaml:"state_file"`
+	Version       int            `yaml:"version" validate:"required,min=1,max=3"`
 	Node          NodeConfig     `yaml:"node" validate:"required"`
 	Netplan       NetplanConfig  `yaml:"netplan"`
 	KVM           KVMConfig      `yaml:"kvm"`
@@ -176,6 +179,8 @@ type OverlayRouting struct {
 
 // PeerConfig defines a remote peer for VXLAN overlay.
 type PeerConfig struct {
+	Sessions []PeerSession  `yaml:"sessions"`
+	Routing  OverlayRouting `yaml:"routing"`
 	ID       string         `yaml:"id" validate:"required"`
 	Endpoint EndpointConfig `yaml:"endpoint" validate:"required"`
 	Auth     AuthConfig     `yaml:"auth"`
@@ -386,9 +391,10 @@ type SecurityConfig struct {
 
 // ControlPlaneConfig defines the gRPC control plane settings.
 type ControlPlaneConfig struct {
-	Transport string       `yaml:"transport" validate:"omitempty,eq=grpc"`
-	Listen    ListenConfig `yaml:"listen"`
-	TLS       TLSConfig    `yaml:"tls"`
+	InsecureLab bool         `yaml:"insecure_lab"`
+	Transport   string       `yaml:"transport" validate:"omitempty,eq=grpc"`
+	Listen      ListenConfig `yaml:"listen"`
+	TLS         TLSConfig    `yaml:"tls"`
 }
 
 // ListenConfig defines listen address and port.
@@ -529,6 +535,9 @@ func (h *HealthConfig) DeadAfterDuration() time.Duration {
 // For v1 configs with singular overlay, it converts to []OverlayDef format.
 // For v2 configs, it returns the Overlays slice directly.
 func (c *Config) GetOverlays() []OverlayDef {
+	if c.Version == 3 {
+		return c.Overlays
+	}
 	// If v2 overlays are defined, use them directly
 	if len(c.Overlays) > 0 {
 		return c.Overlays

@@ -69,6 +69,9 @@ func (l *Loader) Validate(cfg *Config) error {
 
 // validateSemantics performs additional validation beyond struct tags.
 func (l *Loader) validateSemantics(cfg *Config) error {
+	if cfg.Version == 3 {
+		return validateV3(cfg)
+	}
 	// Validate overlay configuration based on version
 	if cfg.Version == 2 {
 		// V2: require overlays array
