@@ -81,11 +81,11 @@ nfpms:
 
       # v3 examples and operational guide shipped with the controller package.
       - src: configs/v3-t1-sp.yaml
-        dst: /usr/share/doc/n-netman/examples/v3-t1-sp.yaml
+        dst: /usr/share/doc/n-netman/configs/v3-t1-sp.yaml
       - src: configs/v3-t1-rj.yaml
-        dst: /usr/share/doc/n-netman/examples/v3-t1-rj.yaml
+        dst: /usr/share/doc/n-netman/configs/v3-t1-rj.yaml
       - src: docs/transport-failover.md
-        dst: /usr/share/doc/n-netman/transport-failover.md
+        dst: /usr/share/doc/n-netman/docs/transport-failover.md
 
       # Systemd unit
       - src: packaging/n-netman.service
