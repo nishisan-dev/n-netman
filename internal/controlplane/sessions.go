@@ -150,6 +150,7 @@ type SessionManager struct {
 	metrics   *pathMetrics
 	selected  map[string]string
 	installed map[string]nl.PathRoute
+	stopping  bool
 	wg        sync.WaitGroup
 }
 
@@ -192,6 +193,12 @@ func (m *SessionManager) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			m.mu.Lock()
+			m.stopping = true
+			for _, p := range m.paths {
+				p.health.Eligible = false
+				p.health.State = SessionDown
+				p.ads = map[string]time.Time{}
+			}
 			for _, server := range m.listeners {
 				server.Stop()
 			}
@@ -518,6 +525,9 @@ func (m *SessionManager) validatePath(p *sessionPath) error {
 }
 
 func (m *SessionManager) desiredLocked() []nl.PathRoute {
+	if m.stopping {
+		return nil
+	}
 	var desired []nl.PathRoute
 	now := time.Now()
 	for _, policy := range m.cfg.RoutePolicies {
@@ -687,6 +697,9 @@ func (s *pathServer) ExchangeState(ctx context.Context, r *pb.StateRequest) (*pb
 	}
 	s.manager.mu.Lock()
 	defer s.manager.mu.Unlock()
+	if s.manager.stopping {
+		return nil, status.Error(codes.Unavailable, "session manager stopping")
+	}
 	if _, e := s.manager.receiveSnapshotLocked(p, r.Session, r.Routes); e != nil {
 		return nil, status.Error(codes.FailedPrecondition, e.Error())
 	}
@@ -706,6 +719,9 @@ func (s *pathServer) mutate(ctx context.Context, node string, id *pb.SessionIden
 	}
 	s.manager.mu.Lock()
 	defer s.manager.mu.Unlock()
+	if s.manager.stopping {
+		return nil, status.Error(codes.Unavailable, "session manager stopping")
+	}
 	if p.rxEpoch != id.Epoch || p.rxTransport != id.TransportId || id.Generation <= p.rxGeneration {
 		return nil, status.Error(codes.FailedPrecondition, "stale session generation")
 	}

@@ -275,3 +275,22 @@ func TestSessionCertificateMustAuthenticateClaimedNode(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestStoppingPreventsLateRouteReinstallation(t *testing.T) {
+	m, f := testSessions(t)
+	p := m.paths["rj/pw"]
+	p.health.Eligible = true
+	m.snapshotLocked(p, []*pb.Route{{Prefix: "192.168.103.0/24", LeaseSeconds: 30}}, true)
+	m.reconcileLocked("initial")
+	if len(f.routes) != 1 {
+		t.Fatal("initial candidate missing")
+	}
+	m.stopping = true
+	m.reconcileLocked("shutdown")
+	// Model a handler already in flight when grpc.Stop cancels its connection.
+	m.snapshotLocked(p, []*pb.Route{{Prefix: "192.168.103.0/24", LeaseSeconds: 30}}, true)
+	m.reconcileLocked("late snapshot")
+	if len(f.routes) != 0 {
+		t.Fatal("late handler reinstalled route after cleanup")
+	}
+}

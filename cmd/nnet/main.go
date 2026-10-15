@@ -476,10 +476,7 @@ func doctorCmd() *cobra.Command {
 		Short: "Run diagnostics on the network and environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			if cfg.Version == 3 {
+			if err == nil && cfg.Version == 3 {
 				return transportDoctor(cfg)
 			}
 			fmt.Println("🩺 Running n-netman diagnostics...")
