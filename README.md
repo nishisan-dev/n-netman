@@ -1,781 +1,231 @@
-# n-netman — Nishi Network Manager
+# n-netman — Linux VXLAN Overlay Networking & Routing for KVM/libvirt
 
-[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://go.dev/)
-[![License](https://img.shields.io/badge/license-Nishi--NC-orange.svg)](LICENSE)
+**A lightweight, self-hosted network control plane for Linux.** Build multi-host **VXLAN L2/L3 overlays**, manage Linux bridges and forwarding databases, exchange routes over **gRPC**, and integrate with **KVM/libvirt**—without requiring Open vSwitch, FRRouting, or Kubernetes.
 
-**n-netman** é um agente leve para criação e gerenciamento de **overlays VXLAN L3/L2** entre hosts Linux rodando KVM/libvirt.
+[![CI](https://github.com/nishisan-dev/n-netman/actions/workflows/ci.yaml/badge.svg)](https://github.com/nishisan-dev/n-netman/actions/workflows/ci.yaml)
+[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Linux](https://img.shields.io/badge/platform-Linux-333333?logo=linux&logoColor=white)](docs/overview.md)
+[![License: Non-commercial evaluation](https://img.shields.io/badge/license-non--commercial%20evaluation-orange)](LICENSE)
 
-## 🎯 Objetivo
+> **Em português:** o n-netman gerencia redes overlay VXLAN, bridges Linux, roteamento entre hosts e integração KVM/libvirt. O foco é automação de redes Linux com configuração declarativa e um control plane enxuto. A [documentação detalhada](docs/README.md) está em português.
 
-Permitir que redes virtuais distribuídas sejam criadas de forma **declarativa e simples**, eliminando a necessidade de soluções complexas como OVS.
+## Why n-netman?
 
-### O que já funciona
+Managing distributed Linux virtualization hosts often means stitching together `ip link`, `bridge fdb`, static routes, policy rules, and VM networking. **n-netman turns those moving pieces into a declarative configuration and a continuously reconciled desired state.**
 
-- ✅ Criação/atualização de interfaces VXLAN e bridges Linux
-- ✅ Sincronização de FDB para peers configurados (flooding BUM)
-- ✅ BUM em head-end-replication (FDB) e multicast (grupo IP)
-- ✅ **Troca de rotas via gRPC** (ExchangeState, AnnounceRoutes, WithdrawRoutes)
-- ✅ Instalação automática de rotas recebidas no kernel (server e client)
-- ✅ **Políticas de import aplicadas** (`allow`/`deny`/`accept_all`) — default seguro (nega)
-- ✅ CLI `nnet` com `apply`, `status`, `routes`, `doctor`, `cert`, `libvirt`, `inject`, `version`
-- ✅ Carregamento/validação de config YAML (`version` obrigatória, duplicatas detectadas)
-- ✅ Healthchecks HTTP e métricas Prometheus populadas em runtime
-- ✅ **Status real dos peers** via endpoint `/status` (healthy/unhealthy/disconnected)
-- ✅ **Estatísticas de rotas** (exported, installed, per-peer)
-- ✅ **Cleanup automático** de rotas no shutdown (multi-tabela) e quando peers caem (`flush_on_peer_down`)
-- ✅ **Multi-Overlay (v2)** — Múltiplos VXLANs com routing independente e peers por overlay (`vnis`)
-- ✅ Bridge com IPv4/IPv6 por overlay (para nexthop e anúncios)
-- ✅ **TLS/mTLS** — CA obrigatória, verificação do servidor e identidade do peer pelo certificado
-- ✅ **Policy-Based Routing** — Rotas instaladas em tabelas específicas por VNI
-- ✅ **Integração libvirt** — Attach/detach de VMs via `nnet libvirt`
-- ✅ **Injeção de rotas nas VMs** — o controller publica rotas num grupo multicast na bridge, selecionando o que anunciar por tags do segmento (`routing.inject`)
-- ✅ **Agente nas VMs (`nnet-agent`)** — binário e pacote próprios; aplica IP estático e programa as rotas recebidas (protocolo 98), com lease independente por controller
-- ✅ **Communities nas rotas** (`export.tags`) — viajam até os peers e filtram o que é injetado em cada segmento
+It is intended for homelabs, network labs, virtualization environments, and multi-host overlay experiments that need native Linux networking rather than a full software-defined networking stack.
 
-### Em progresso
+- **Native Linux networking:** VXLAN, Linux bridge, FDB, routes, and policy routing through Netlink.
+- **Multi-overlay support:** separate VNIs, bridges, forwarding modes, and routing tables.
+- **Distributed route exchange:** gRPC state synchronization, route announcements/withdrawals, import filters, and route leases.
+- **Virtualization integration:** libvirt attachment commands and an optional `nnet-agent` inside VMs.
+- **Operational visibility:** CLI diagnostics, peer status, JSON logs, HTTP health endpoints, and Prometheus metrics.
+- **Transport-aware failover (v3):** independent, interface-bound sessions for an existing Ethernet pseudowire and a VXLAN backup.
+- **Secure peering:** TLS/mTLS with certificate-based peer identity; mTLS is required by default in v3.
 
-- ⚠️ Netplan parsing e rotas conectadas/estáticas
+### Capabilities at a glance
 
-### Ainda não funciona (resumo rápido)
+| Capability | Current status |
+| --- | --- |
+| Linux VXLAN interface and bridge reconciliation | Available |
+| Head-end replication (FDB) and multicast BUM | Available |
+| Multiple overlays / VNIs and per-overlay routing tables | Available |
+| gRPC route exchange (announce, withdraw, state sync) | Available |
+| Route import policies, leases, and peer-down cleanup | Available |
+| Linux policy-based routing (interface-based rules) | Available |
+| TLS/mTLS and certificate tooling | Available |
+| KVM/libvirt integration and optional VM route agent | Available |
+| Prometheus metrics, health checks, diagnostics | Available |
+| Automatic export of all connected / Netplan static routes | Not implemented |
+| `lookup_rules.mode: prefix` | Not implemented |
+| Transport-aware PW/VXLAN route failover | Available with configuration v3 |
 
-- ❌ Export estendido (`export_all`, `include_connected`, `include_netplan_static`) — export usa só `networks`
-- ❌ `lookup_rules.mode: prefix` (apenas `interface` implementado)
-- ❌ Validação de PSK entre peers (o canal de injeção **usa** PSK; a troca gRPC entre peers, não)
-- ❌ IP dinâmico no `nnet-agent` — a fase 1 é apenas endereço estático
-- ❌ DNS, search domain e MTU no anúncio de injeção
-- ❌ Fragmentação de anúncio — um anúncio precisa caber em 1400 bytes
+For implementation details and current limitations, see [Routing](docs/routing.md), [Configuration](docs/configuration.md), and [Architecture](docs/architecture.md).
 
----
+## Architecture
 
-## 📋 Pré-requisitos
-
-### Sistema Operacional
-- Linux com kernel 3.7+ (suporte a VXLAN)
-- Testado em Ubuntu 22.04+, Debian 12+
-
-### Dependências
-```bash
-# Verificar suporte a VXLAN e bridges
-lsmod | grep vxlan
-lsmod | grep bridge
-
-# Se não estiverem carregados:
-sudo modprobe vxlan
-sudo modprobe bridge
+```text
+                  +-------------------------------+
+                  |           n-netman            |
+                  |        nnetd / nnet CLI       |
+                  +---------------+---------------+
+                                  |
+                 +----------------+-----------------+
+                 |                                  |
+        +--------v---------+              +---------v--------+
+        |  Control plane   |              |    Reconciler    |
+        | gRPC + route     |              | VXLAN / bridge   |
+        | import / export  |              | FDB / ip rules   |
+        +--------+---------+              +---------+--------+
+                 |                                  |
+          Peer exchange                      Linux Netlink
+                 |                                  |
+          Other Linux hosts              Kernel routing + VXLAN
+                                                    |
+                                          KVM/libvirt bridges + VMs
 ```
 
-### Build
-- Go 1.26 ou superior (CI e laboratório usam Go 1.26.8)
+The **underlay** is provided by Linux and your existing network configuration. The overlay reconciler manages the VXLAN/bridge resources explicitly configured for n-netman; it is not a replacement for a physical switch, LACP configuration, or a datacenter pseudowire.
+
+## Quick start
+
+### Requirements
+
+- Linux with kernel support for `vxlan` and `bridge` (VXLAN support starts in Linux 3.7; distribution features vary).
+- **Go 1.26+** to build from source.
+- Root or appropriate Linux capabilities for creating interfaces and updating routes.
+- IP connectivity between overlay endpoints.
+
+The project has been tested on Ubuntu 22.04+ and Debian 12+ according to its current project documentation.
+
+### Install a release
+
+Download the Linux amd64 controller package (`n-netman`) or optional VM agent package (`n-netman-agent`) from [GitHub Releases](https://github.com/nishisan-dev/n-netman/releases/latest). Releases also include tar archives and SHA256 checksums. Prebuilt binaries do not require Go on the target host.
+
+### Build and inspect
 
 ```bash
-# Verificar versão do Go
-go version
-```
-
----
-
-## 🚀 Instalação
-
-### Opção 1: Build do Fonte
-
-```bash
-# Clonar repositório
 git clone https://github.com/nishisan-dev/n-netman.git
 cd n-netman
 
-# Build
 make build
+make test
 
-# Ou manualmente:
-go build -o bin/nnetd ./cmd/nnetd
-go build -o bin/nnet ./cmd/nnet
+./bin/nnet --help
+./bin/nnet version
 ```
 
-### Opção 2: Instalação no Sistema
+The build produces three binaries:
 
-```bash
-# Build e instalar em $GOPATH/bin
-make install
+| Binary | Purpose |
+| --- | --- |
+| `nnetd` | Network controller / control-plane daemon |
+| `nnet` | CLI for apply, status, peers, routes, doctor, certificates, and libvirt |
+| `nnet-agent` | Optional route agent for virtual machines |
 
-# Ou copiar manualmente
-sudo cp bin/nnetd /usr/local/bin/
-sudo cp bin/nnet /usr/local/bin/
-```
+### Configure an overlay
 
----
-
-## ⚙️ Configuração
-
-### Criar Diretório de Configuração
+Start from the included [multi-overlay YAML example](examples/multi-overlay.yaml). It demonstrates two VNIs, independent routing policies, configured peers, and optional route injection.
 
 ```bash
 sudo mkdir -p /etc/n-netman
+sudo cp examples/multi-overlay.yaml /etc/n-netman/n-netman.yaml
+
+# IMPORTANT: edit the example IDs, peer addresses, underlay interfaces,
+# bridges, and subnets for your own host before applying anything.
+sudoedit /etc/n-netman/n-netman.yaml
+
+./bin/nnet -c /etc/n-netman/n-netman.yaml doctor
+./bin/nnet -c /etc/n-netman/n-netman.yaml apply --dry-run
+
+# Only after reviewing the target interfaces and routes:
+sudo ./bin/nnet -c /etc/n-netman/n-netman.yaml apply
+sudo ./bin/nnetd -config /etc/n-netman/n-netman.yaml
 ```
 
-### Arquivo de Configuração
+**Safety:** `apply` and `nnetd` can change host network state. Test in a VM or lab namespace before using a remotely administered KVM host. The sample config is illustrative and is **not** a ready-to-run production configuration.
 
-Crie o arquivo `/etc/n-netman/n-netman.yaml`:
-
-```yaml
-version: 1
-
-node:
-  id: "host-a-01"          # Identificador único deste nó
-  hostname: "host-a"
-  tags:
-    - "datacenter-1"
-    - "kvm"
-
-# Integração com netplan (somente leitura)
-netplan:
-  enabled: true
-  underlay:
-    prefer_interfaces:
-      - "eth0"
-      - "ens3"
-    prefer_address_families:
-      - "ipv4"
-
-# Integração com KVM/libvirt (opcional)
-kvm:
-  enabled: false           # Defina como true se usar libvirt
-  bridges:
-    - name: "br-nnet-100"
-      stp: false
-      mtu: 1450
-      manage: true
-
-# Configuração do overlay VXLAN
-overlay:
-  vxlan:
-    vni: 100               # VXLAN Network Identifier
-    name: "vxlan100"
-    dstport: 4789
-    mtu: 1450
-    learning: true
-    bridge: "br-nnet-100"
-
-  # Peers (outros hosts no overlay)
-  peers:
-    - id: "host-b-01"
-      endpoint:
-        address: "10.10.0.12"    # IP underlay do peer
-      auth:
-        mode: "psk"
-        psk_ref: "file:/etc/n-netman/psk/host-b-01.key"
-      health:
-        keepalive_interval_ms: 1500
-        dead_after_ms: 6000
-
-    - id: "host-c-01"
-      endpoint:
-        address: "10.10.0.13"
-
-# Roteamento entre peers
-routing:
-  enabled: true
-  export:
-    export_all: false
-    networks:
-      - "172.16.10.0/24"   # Redes que este nó anuncia
-      - "2001:db8:10::/64" # Suporte IPv6
-    include_connected: true
-    include_netplan_static: true
-    metric: 100
-  import:
-    accept_all: false
-    allow:
-      - "172.16.0.0/16"
-      - "2001:db8::/32"
-    deny:
-      - "0.0.0.0/0"        # Bloquear default route
-    install:
-      table: 100           # Tabela de roteamento customizada
-      replace_existing: true
-      flush_on_peer_down: true
-      route_lease_seconds: 30
-
-# Topologia
-topology:
-  mode: "direct-preferred"
-  transit: "deny"          # Não permitir trânsito por padrão
-
-# Segurança do control-plane
-security:
-  control_plane:
-    transport: "grpc"
-    listen:
-      address: "0.0.0.0"
-      port: 9898
-    tls:
-      enabled: false
-      cert_file: "/etc/n-netman/tls/server.crt"
-      key_file: "/etc/n-netman/tls/server.key"
-      ca_file: "/etc/n-netman/tls/ca.crt"
-
-# Observabilidade
-observability:
-  logging:
-    level: "info"
-    format: "json"
-  metrics:
-    enabled: true
-    listen:
-      address: "127.0.0.1"
-      port: 9109
-  healthcheck:
-    enabled: true
-    listen:
-      address: "127.0.0.1"
-      port: 9110
-```
-
-### Chaves PSK (Opcional)
-
-Se usar autenticação PSK entre peers:
+### Verify
 
 ```bash
-sudo mkdir -p /etc/n-netman/psk
-
-# Gerar chave para cada peer
-openssl rand -hex 32 | sudo tee /etc/n-netman/psk/host-b-01.key
-sudo chmod 600 /etc/n-netman/psk/*.key
-```
-
-### Certificados mTLS (Recomendado)
-
-O `nnet` possui utilitários embutidos para gerenciar PKI:
-
-```bash
-# 1. Gerar CA Raiz
-nnet cert init-ca --output-dir /etc/n-netman/tls
-
-# 2. Gerar certificado para este nó
-nnet cert gen-host \
-  --host $(hostname) \
-  --ip 192.168.56.11 \
-  --ca-cert /etc/n-netman/tls/ca.crt \
-  --ca-key /etc/n-netman/tls/ca.key \
-  --output-dir /etc/n-netman/tls
-```
-
-### Multi-Overlay (Config v2) 🆕
-
-A partir da versão 2 do config, você pode definir múltiplos overlays VXLAN, cada um com seu próprio routing:
-
-```yaml
-version: 2
-
-node:
-  id: "host-a"
-  hostname: "host-a"
-
-overlays:
-  # Production Overlay (VNI 100)
-  - vni: 100
-    name: "vxlan-prod"
-    dstport: 4789
-    mtu: 1450
-    learning: true
-    bridge:
-      name: "br-prod"
-      ipv4: "10.100.0.1/24"
-    underlay_interface: "ens3"    # Interface física para este overlay
-    bum:
-      mode: "head-end-replication"
-    routing:
-      export:
-        networks:
-          - "172.16.10.0/24"
-        metric: 100
-      import:
-        accept_all: true
-        install:
-          table: 100
-          lookup_rules:
-            enabled: true          # ← Cria rules de PBR automaticamente
-
-  # Management Overlay (VNI 200)
-  - vni: 200
-    name: "vxlan-mgmt"
-    dstport: 4789
-    mtu: 1450
-    learning: true
-    bridge:
-      name: "br-mgmt"
-      ipv4: "10.200.1.1/24"
-    underlay_interface: "ens4"
-    bum:
-      mode: "multicast"
-      group: "239.1.1.200"
-    routing:
-      export:
-        networks:
-          - "10.200.0.0/24"
-        metric: 200
-      import:
-        accept_all: true
-        install:
-          table: 200
-          lookup_rules:
-            enabled: true          # ← Cria rules de PBR automaticamente
-
-# Peers (shared across overlays)
-overlay:
-  peers:
-    - id: "host-b"
-      endpoint:
-        address: "192.168.56.12"
-```
-
-### Policy-Based Routing (`lookup_rules`) 🆕
-
-Quando `lookup_rules.enabled: true`, o n-netman cria automaticamente regras `ip rule` para direcionar tráfego da bridge para a tabela de roteamento correta:
-
-```bash
-# Regras criadas automaticamente para br-prod (table 100):
-ip rule add iif br-prod lookup 100 priority 100
-ip rule add oif br-prod lookup 100 priority 101
-
-# Regras criadas automaticamente para br-mgmt (table 200):
-ip rule add iif br-mgmt lookup 200 priority 100
-ip rule add oif br-mgmt lookup 200 priority 101
-```
-
-**Por que isso é importante?**
-
-Sem essas regras, o kernel Linux consulta apenas a `table main` para decisões de roteamento. Com `lookup_rules` habilitado:
-
-1. Tráfego **entrando** por `br-prod` (iif) → consulta `table 100`
-2. Tráfego **saindo** por `br-prod` (oif) → consulta `table 100`
-3. Isolamento completo entre overlays — cada um usa sua própria tabela
-
-Veja o exemplo completo em [`examples/multi-overlay.yaml`](examples/multi-overlay.yaml).
-
----
-
-## 🎮 Uso
-
-### CLI - Comandos Disponíveis
-
-```bash
-# Ver ajuda
-nnet --help
-
-# Ver versão
-nnet version
-
-# Verificar configuração e mostrar status
-nnet -c /etc/n-netman/n-netman.yaml status
-
-# Visualizar rotas configuradas
-nnet -c /etc/n-netman/n-netman.yaml routes
-
-# Dry-run (mostra o que seria feito sem executar)
-nnet -c /etc/n-netman/n-netman.yaml apply --dry-run
-
-# Aplicar configuração (requer root)
-sudo nnet -c /etc/n-netman/n-netman.yaml apply
-
-# Diagnóstico do sistema
-nnet -c /etc/n-netman/n-netman.yaml doctor
-
-# Integração libvirt - listar VMs
-nnet libvirt list-vms --all
-
-# Integração libvirt - attach VM a bridge
-sudo nnet libvirt attach web-01 --bridge br-prod
-```
-
-### Integração libvirt
-
-O n-netman oferece comandos para integrar VMs libvirt/KVM às bridges de overlay:
-
-![Fluxo de integração](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/libvirt_integration.puml)
-
-```bash
-# Configurar dependência systemd (bridges existem antes das VMs)
-sudo nnet libvirt enable
-
-# Listar VMs e interfaces
-nnet libvirt list-vms --all
-
-# Attach VM a uma bridge
-sudo nnet libvirt attach web-01 --bridge br-prod
-
-# Detach por MAC
-sudo nnet libvirt detach web-01 --mac 52:54:00:12:34:56
-
-# Ver status da integração
-nnet libvirt status
-```
-
-Veja a documentação completa em [docs/libvirt.md](docs/libvirt.md).
-
-### Exemplo de Saída: `nnet status`
-
-```
-🖥️  Node: host-a (host-a)
-
-📡 VXLAN Interfaces:
-─────────────────────────────────────────
-  🟢 UP vxlan100 (VNI 100, MTU 1450)
-
-🌉 Bridges:
-─────────────────────────────────────────
-  🟢 UP br-nnet-100 (MTU 1450)
-      Attached: [vxlan100]
-
-👥 Configured Peers:
-─────────────────────────────────────────
-  ID      ENDPOINT       STATUS               ROUTES
-  ──      ────────       ──────               ──────
-  host-b  192.168.56.12  🟢 healthy (5s ago)   1
-  host-c  192.168.56.13  🟢 healthy (3s ago)   1
-
-📊 Route Statistics:
-─────────────────────────────────────────
-  📤 Exported:   1 route(s) (172.16.10.0/24)
-  📥 Installed:  2 route(s) in table 100
-      • 172.16.20.0/24 via 192.168.56.12 (host-b)
-      • 172.16.30.0/24 via 192.168.56.13 (host-c)
-```
-
-### Daemon
-
-```bash
-# Iniciar daemon em foreground (requer root)
-sudo nnetd -config /etc/n-netman/n-netman.yaml
-
-# Ver versão
-nnetd -version
-```
-
-### Systemd Service (Opcional)
-
-Crie `/etc/systemd/system/n-netman.service`:
-
-```ini
-[Unit]
-Description=n-netman VXLAN Overlay Manager
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/nnetd -config /etc/n-netman/n-netman.yaml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable n-netman
-sudo systemctl start n-netman
-sudo systemctl status n-netman
-```
-
----
-
-## 🧪 Lab Testing (Vagrant)
-
-O projeto inclui um `Vagrantfile` para testar multi-overlay em um ambiente com 3 VMs.
-
-### Topologia do Lab (Multi-Overlay)
-
-```
-┌───────────────────────────────────────────────────────────────────────────────┐
-│                           Underlay Networks                                   │
-├───────────────────────────────────────────────────────────────────────────────┤
-│    Production: 192.168.56.0/24    │    Management: 192.168.57.0/24           │
-├───────────────────┬───────────────┴─────┬─────────────────────────────────────┤
-│     host-a        │       host-b        │        host-c                       │
-│  Prod: .56.11     │    Prod: .56.12     │     Prod: .56.13                    │
-│  Mgmt: .57.11     │    Mgmt: .57.12     │     Mgmt: .57.13                    │
-│                   │                     │                                     │
-│ VNI 100 (Prod):   │ VNI 100 (Prod):     │ VNI 100 (Prod):                     │
-│ 172.16.10.0/24    │ 172.16.20.0/24      │ 172.16.30.0/24                      │
-│                   │                     │                                     │
-│ VNI 200 (Mgmt):   │ VNI 200 (Mgmt):     │ VNI 200 (Mgmt):                     │
-│ 10.200.10.0/24    │ 10.200.20.0/24      │ 10.200.30.0/24                      │
-└───────────────────┴─────────────────────┴─────────────────────────────────────┘
-```
-
-### Requisitos
-
-- [Vagrant](https://www.vagrantup.com/) instalado
-- [VirtualBox](https://www.virtualbox.org/) instalado
-- ~2GB de RAM livre
-
-### Subir o Lab
-
-```bash
-# Subir as 3 VMs (primeira vez demora ~5min)
-vagrant up
-
-# Ver status
-vagrant status
-```
-
-### Testar a Troca de Rotas
-
-```bash
-# Terminal 1: host-a
-vagrant ssh host-a
-sudo nnetd -config /etc/n-netman/n-netman.yaml
-
-# Terminal 2: host-b
-vagrant ssh host-b
-sudo nnetd -config /etc/n-netman/n-netman.yaml
-
-# Terminal 3: host-c
-vagrant ssh host-c
-sudo nnetd -config /etc/n-netman/n-netman.yaml
-```
-
-Aguarde ~30 segundos e verifique as rotas aprendidas:
-
-```bash
-# Em qualquer VM - verificar ambas as tabelas
-ip route show table 100   # Production overlay routes
-ip route show table 200   # Management overlay routes
-
-# Saída esperada (ex: em host-a):
-# Table 100 (Production - VNI 100):
-# 172.16.20.0/24 via 10.100.0.2 dev br-prod proto openr metric 100
-# 172.16.30.0/24 via 10.100.0.3 dev br-prod proto openr metric 100
-
-# Table 200 (Management - VNI 200):
-# 10.200.20.0/24 via 10.200.1.2 dev br-mgmt proto openr metric 200
-# 10.200.30.0/24 via 10.200.1.3 dev br-mgmt proto openr metric 200
-```
-
-### Script de Validação
-
-```bash
-# Em cada VM, rodar o script de teste
-./n-netman/scripts/lab-test.sh
-```
-
-### Comandos Úteis
-
-```bash
-# Destruir VMs
-vagrant destroy -f
-
-# Recriar uma VM específica
-vagrant destroy host-a -f && vagrant up host-a
-
-# SSH em uma VM
-vagrant ssh host-b
-```
-
----
-
-## 📊 Observabilidade
-
-### Métricas Prometheus
-
-Disponíveis em `http://127.0.0.1:9109/metrics`. As seguintes métricas são coletadas e exportadas:
-
-| Métrica | Descrição |
-|---------|-----------|
-| `nnetman_reconciliations_total` | Total de ciclos de reconciliação |
-| `nnetman_reconciliation_errors_total` | Erros de reconciliação |
-| `nnetman_reconciliation_duration_seconds` | Duração dos ciclos de reconciliação |
-| `nnetman_last_reconcile_timestamp_seconds` | Timestamp do último reconcile |
-| `nnetman_vxlans_active` | Interfaces VXLAN ativas |
-| `nnetman_bridges_active` | Bridges ativas |
-| `nnetman_fdb_entries_total` | Total de entradas FDB |
-| `nnetman_peers_configured` | Peers configurados |
-| `nnetman_peers_connected` | Peers conectados |
-| `nnetman_peers_healthy` | Peers saudáveis |
-| `nnetman_routes_exported` | Rotas exportadas |
-| `nnetman_routes_imported` | Rotas importadas |
-| `nnetman_grpc_requests_total` | Total de requisições gRPC |
-| `nnetman_grpc_request_duration_seconds` | Duração das requisições gRPC |
-
-### Health Checks
-
-```bash
-# Liveness
-curl http://127.0.0.1:9110/livez
-
-# Readiness
-curl http://127.0.0.1:9110/readyz
-
-# Health geral
-curl http://127.0.0.1:9110/healthz
-
-# Status detalhado (peers + rotas)
-curl http://127.0.0.1:9110/status
-```
-
----
-
-## 🧩 Componentes Internos (Go)
-
-- `cmd/nnetd`: daemon (carrega config, inicia observabilidade e reconciler)
-- `cmd/nnet`: CLI para aplicar config e inspecionar estado
-- `internal/config`: structs, defaults e validação do YAML
-- `internal/reconciler`: loop que garante bridge/VXLAN/FDB conforme config
-- `internal/netlink`: wrappers de bridge/VXLAN/FDB/rotas via netlink
-- `internal/controlplane`: servidor/cliente gRPC com ExchangeState/Announce/Withdraw
-- `internal/routing`: políticas de export/import (helpers, ainda não aplicados no daemon)
-- `internal/observability`: métricas Prometheus e healthchecks HTTP
-
----
-
-## 🔧 Troubleshooting
-
-### Verificar Interfaces Criadas
-
-```bash
-# VXLAN
-ip -d link show vxlan100
-
-# Bridge
-ip -d link show br-nnet-100
-bridge link show
-
-# FDB entries
-bridge fdb show dev vxlan100
-```
-
-### Verificar Rotas
-
-```bash
-# Rotas na tabela 100
+./bin/nnet -c /etc/n-netman/n-netman.yaml status
+./bin/nnet -c /etc/n-netman/n-netman.yaml routes
+ip -d link show type vxlan
+bridge fdb show
 ip route show table 100
-
-# Todas as rotas
-ip route show
 ```
 
-### Logs
+If observability is enabled with the documented defaults:
 
 ```bash
-# Com systemd
-journalctl -u n-netman -f
-
-# Em foreground
-nnetd -config /etc/n-netman/n-netman.yaml 2>&1 | jq .
+curl http://127.0.0.1:9110/healthz
+curl http://127.0.0.1:9110/status
+curl http://127.0.0.1:9109/metrics
 ```
 
-### Diagnóstico Completo
+## Routing and peer connectivity
+
+n-netman already implements a small, purpose-built **gRPC routing control plane**. Peers can exchange routes using `ExchangeState`, `AnnounceRoutes`, and `WithdrawRoutes`; learned routes can be filtered and programmed in Linux via Netlink.
+
+- Advertised prefixes are currently **explicitly listed** in the configuration (`export.networks`).
+- Import filters support `allow`, `deny`, and `accept_all`; the default policy is conservative.
+- Routes can use per-overlay routing tables and be withdrawn when a peer fails or a lease expires.
+- With v1/v2, peer health uses periodic state RPCs. With v3, the active `Keepalive` stream checks application ACKs independently on each transport, with configurable failure and stable-recovery thresholds.
+
+n-netman is not BGP and does not implement AS paths or full BGP routing policy semantics. Failover timing follows the configured application heartbeat cycles and scheduling; it is not a sub-second SLA.
+
+Read the [Routing guide](docs/routing.md) for route semantics, protocol 99, import policies, and current restrictions.
+
+## Linux virtualization and VM networking
+
+The project supports KVM/libvirt workflows using native Linux bridges. The optional in-guest `nnet-agent` receives route advertisements from a controller and applies routes inside a VM.
 
 ```bash
-nnet doctor
+./bin/nnet libvirt list-vms --all
+./bin/nnet libvirt status
 ```
 
----
+See [KVM/libvirt integration](docs/libvirt.md), [Route injection](docs/inject.md), and [VM agent](docs/agent.md).
 
-## 🏗️ Arquitetura
+## Security and observability
 
-### Visão Geral dos Componentes
+**Use mTLS for communication between remote peers.** The project includes certificate-management commands; plaintext control-plane examples are intended for isolated labs only. Route injection to VMs uses its own PSK mechanism—this is distinct from peer-to-peer gRPC authentication.
 
-O diagrama abaixo mostra a arquitetura atual. O control-plane agora implementa troca real de rotas via gRPC.
+```bash
+./bin/nnet cert init-ca --output-dir /etc/n-netman/tls
+./bin/nnet cert gen-host --help
+```
 
-Fonte: `docs/diagrams/architecture.puml`
+Prometheus metrics include reconciliation activity, peer connectivity, active VXLAN/bridge resources, and imported/exported route counts. See [Observability](docs/observability.md) and [Configuration](docs/configuration.md).
 
-![Arquitetura geral](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/architecture.puml)
+## Transport-aware routing (configuration v3)
 
-### Fluxo de Reconciliação (Multi-Overlay)
+Use the complete [SP](configs/v3-t1-sp.yaml) and [RJ](configs/v3-t1-rj.yaml) examples for an existing Ethernet PW and a managed VXLAN backup. Replace the sample interfaces, VTEP addresses, and certificate paths before deployment. Configuration v1/v2 retains its previous behavior.
 
-Fonte: `docs/diagrams/reconciler-loop.puml`
+- **External PW remains observe-only:** existing bonds, VLANs, KVM bridges, and TAPs are preserved. VXLAN/bridge/FDB management requires explicit ownership, and routing-only operation is supported.
+- **Control stays on its transport:** each gRPC/TCP session binds its source and device, validates the direct egress path, and uses application ACK deadlines with replay checks and recovery hysteresis.
+- **PW preferred, VXLAN backup:** authorized IPv4 candidates coexist in the same routing table with metrics 100/200. A failed session or withdrawn prefix removes only its own candidate.
+- **Conservative route ownership:** a durable journal and exact Netlink operations protect third-party routes, including unowned routes with protocol 99.
+- **mTLS and explicit prefix policies:** the peer certificate authenticates the node ID; imports default to deny, and next-hop/device/metric/table come from local policy.
 
-![Fluxo de reconciliacao](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/reconciler-loop.puml)
+The default PW policy detects three missed ACKs and requires ten consecutive valid ACKs for recovery. After a daemon crash, routes can remain until restart; the daemon removes journaled stale candidates before establishing health again. Keep its state file persistent and enable service restart.
 
-### Troca de Rotas entre Peers
+See the [v3 operations guide](docs/transport-failover.md) for configuration semantics, CLI diagnostics, metrics, limits, and the reproducible `make test-transport-netns` lab. The lab validates FIB and bidirectional TCP traffic with real mTLS, including blackholes with carrier UP, restart, and prevention of control leaking through the backup. It was run on Linux 6.8; validation on the target Linux 5.4 remains pending.
 
-Fonte: `docs/diagrams/route-exchange.puml`
+## Documentation
 
-![Troca de rotas entre peers](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/route-exchange.puml)
+| Guide | What you'll find |
+| --- | --- |
+| [Overview](docs/overview.md) | Scope and concepts |
+| [Architecture](docs/architecture.md) | Components and data flow |
+| [Configuration](docs/configuration.md) | YAML options |
+| [Network model](docs/network-model.md) | VXLAN, L2/L3 overlays, and bridges |
+| [Routing](docs/routing.md) | gRPC route exchange, imports, and leases |
+| [Transport failover (v3)](docs/transport-failover.md) | PW/VXLAN peering, health, ownership, and SP/RJ examples |
+| [CLI](docs/cli.md) | `nnet` and `nnetd` commands |
+| [KVM/libvirt](docs/libvirt.md) | VM and bridge integration |
+| [Route injection](docs/inject.md) | Route advertisements to VMs |
+| [VM agent](docs/agent.md) | In-guest `nnet-agent` |
+| [Observability](docs/observability.md) | Metrics and health checks |
+| [Topology](docs/topology.md) | Peer and transit model |
 
-### Topologia de Rede
+Also see the [example configurations](examples/) and [lab test scripts](scripts/).
 
-Fonte: `docs/diagrams/topology.puml`
+## Development and testing
 
-![Topologia de rede](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/topology.puml)
+```bash
+make build
+make test
+make test-coverage
+make test-transport-netns
+```
 
-### Canal de Injeção de Rotas
+Integration tests are available through `make test-integration` (privileged network operations) and `make test-integration-netns` (user namespace support required).
 
-Fonte: `docs/diagrams/inject_flow.puml`
+## License
 
-![Injecao de rotas nas VMs](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/inject_flow.puml)
-
-### Deployment do nnet-agent
-
-Fonte: `docs/diagrams/agent_deployment.puml`
-
-![Deployment do agente](https://uml.nishisan.dev/proxy?src=https://raw.githubusercontent.com/nishisan-dev/n-netman/main/docs/diagrams/agent_deployment.puml)
-
----
-
-## ⚠️ Limitações Atuais (MVP)
-
-Esta é uma versão MVP. As seguintes funcionalidades **ainda não estão implementadas**:
-
-### Não Funcional
-| Item | Status | Descrição |
-|------|--------|-----------|
-| **Validação de PSK** | ❌ | Chaves PSK são lidas mas não validadas |
-| **Netplan parsing** | ❌ | Rotas do netplan não são lidas automaticamente |
-| **Export estendido** | ❌ | `export_all`/`include_connected`/`include_netplan_static` ignorados (export usa só `networks`) |
-
-### Funcional
-| Item | Status | Descrição |
-|------|--------|-----------|
-| **VXLAN/Bridge** | ✅ | Criação/reconciliação idempotente (requer root) |
-| **FDB entries** | ✅ | Sincronização de peers BUM por overlay (escopo por VNI) |
-| **Troca de rotas gRPC** | ✅ | Handlers implementados, rotas instaladas e retiradas do kernel |
-| **Políticas de import** | ✅ | `allow`/`deny`/`accept_all` aplicadas no daemon (default nega) |
-| **TLS/mTLS** | ✅ | CA obrigatória, verificação do servidor e identidade do peer pelo CN do certificado |
-| **Multi-Overlay** | ✅ | VNI-aware routing com tabelas e peers independentes por overlay |
-| **Reconciler** | ✅ | Loop funciona; erro em um overlay não aborta os demais |
-| **Métricas** | ✅ | Servidor Prometheus ativo e métricas populadas em runtime |
-| **Healthcheck** | ✅ | Endpoints funcionam; `/healthz` reflete o estado do reconciler |
-| **Status de peers** | ✅ | Health check via ExchangeState (healthy/unhealthy/disconnected) |
-| **Integração libvirt** | ✅ | CLI `nnet libvirt` para attach/detach de VMs (mesmo desligadas) |
-
-### Próximas Prioridades
-1. Testes de integração com VMs reais em lab
-2. Validação de PSK entre peers
-3. Policies avançadas de import/export
+**Source-available, not OSI open source.** n-netman uses the [Nishi Non-Commercial Evaluation License](LICENSE). Personal, educational, and other eligible non-commercial evaluation use is permitted under its terms; production and commercial use require a separate commercial license. Review the LICENSE before deploying.
 
 ---
 
-## 🐛 Known Issues
-
-### FDB Entries via Netlink Library
-
-A biblioteca Go `vishvananda/netlink` possui um bug conhecido onde `NeighAppend()` retorna "operation not supported" ao adicionar entradas FDB em interfaces VXLAN que estão attached a uma bridge.
-
-**Workaround implementado:** Utilizamos `exec.Command("bridge", "fdb", "append", ...)` diretamente ao invés da API da biblioteca.
-
-**Referência:** [vishvananda/netlink#714](https://github.com/vishvananda/netlink/issues/714)
-
----
-
-## 📜 Licença
-
-Nishi Network Manager License (Non-Commercial Evaluation) - veja [LICENSE](LICENSE) para detalhes.
-
-> **Nota:** Uso comercial requer licença separada. Contate o Licensor para mais informações.
-
----
-
-## 🤝 Contribuindo
-
-1. Fork o repositório
-2. Crie uma branch (`git checkout -b feature/minha-feature`)
-3. Commit suas mudanças (`git commit -am 'feat: adiciona minha feature'`)
-4. Push para a branch (`git push origin feature/minha-feature`)
-5. Abra um Pull Request
-
-### Peering por transporte (v3)
-
-Para PW externo com failover para VXLAN e sessões gRPC/mTLS independentes, veja [operação e laboratório v3](docs/transport-failover.md) e os exemplos [SP](configs/v3-t1-sp.yaml)/[RJ](configs/v3-t1-rj.yaml). Configurações v1/v2 mantêm o comportamento anterior.
+**Keywords:** Linux VXLAN, overlay networking, Linux bridge, KVM, libvirt, virtual networking, gRPC routing, Netlink, multi-overlay, VNI, FDB, policy-based routing, network automation, self-hosted network management.
