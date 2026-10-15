@@ -127,6 +127,13 @@ func main() {
 	}
 	defer obsServer.Stop(context.Background())
 
+	if cfg.Version == 3 {
+		if err := runTransportDaemon(ctx, cfg, obsServer, metrics, logger); err != nil {
+			slog.Error("transport daemon failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// Initialize route manager for installing routes learned from peers.
 	routeMgr := nlmgr.NewRouteManager()
 

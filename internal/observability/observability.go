@@ -19,11 +19,19 @@ import (
 
 // PeerStatus represents the status of a single peer.
 type PeerStatus struct {
-	ID       string `json:"id"`
-	Endpoint string `json:"endpoint"`
-	Status   string `json:"status"`
-	LastSeen string `json:"last_seen,omitempty"`
-	Routes   int    `json:"routes"`
+	OverlayReady      bool    `json:"overlay_interface_ready,omitempty"`
+	UnderlayReachable bool    `json:"underlay_reachable,omitempty"`
+	Session           string  `json:"session,omitempty"`
+	Transport         string  `json:"transport,omitempty"`
+	Source            string  `json:"source,omitempty"`
+	Device            string  `json:"device,omitempty"`
+	RTTSeconds        float64 `json:"rtt_seconds,omitempty"`
+	Error             string  `json:"error,omitempty"`
+	ID                string  `json:"id"`
+	Endpoint          string  `json:"endpoint"`
+	Status            string  `json:"status"`
+	LastSeen          string  `json:"last_seen,omitempty"`
+	Routes            int     `json:"routes"`
 }
 
 // NodeStatus represents the overall status of the daemon.
