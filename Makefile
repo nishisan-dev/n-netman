@@ -85,3 +85,10 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@grep -E '^## ' Makefile | sed 's/## /  /'
+
+## test-transport-netns: SP/RJ gRPC/mTLS + PW/VXLAN failover in isolated namespaces
+.PHONY: test-transport-netns
+test-transport-netns:
+	@mkdir -p bin
+	go test -c -race -tags=integration -o bin/transport.integration.test ./internal/controlplane
+	unshare --net --user --map-root-user ./bin/transport.integration.test -test.v -test.run '^TestTransportFailoverNetworkNamespaces$$' -test.timeout 120s

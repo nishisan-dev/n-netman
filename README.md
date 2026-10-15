@@ -775,3 +775,7 @@ Nishi Network Manager License (Non-Commercial Evaluation) - veja [LICENSE](LICEN
 3. Commit suas mudanças (`git commit -am 'feat: adiciona minha feature'`)
 4. Push para a branch (`git push origin feature/minha-feature`)
 5. Abra um Pull Request
+
+### Peering por transporte (v3)
+
+Para PW externo com failover para VXLAN e sessões gRPC/mTLS independentes, veja [operação e laboratório v3](docs/transport-failover.md) e os exemplos [SP](configs/v3-t1-sp.yaml)/[RJ](configs/v3-t1-rj.yaml). Configurações v1/v2 mantêm o comportamento anterior.

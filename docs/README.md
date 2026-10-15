@@ -16,6 +16,7 @@ Documentação completa do n-netman, um agente leve para overlays VXLAN L3/L2 em
 | Documento | Descrição |
 |-----------|-----------|
 | [network-model.md](network-model.md) | VXLAN como L2 carrier, bridges Linux, onde ocorre L3 |
+| [transport-failover.md](transport-failover.md) | Configuração v3, peering por transporte e failover PW/VXLAN |
 | [routing.md](routing.md) | Export/import de rotas, métricas, leases, conceito de transit |
 | [inject.md](inject.md) | Injeção de rotas nas VMs: tags de segmento, canal multicast, segurança |
 | [topology.md](topology.md) | Modos direct-preferred, full-mesh, hub-spoke |
