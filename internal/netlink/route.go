@@ -87,6 +87,9 @@ func (m *RouteManager) Add(cfg RouteConfig) error {
 // When cfg.Protocol is set, the deletion is scoped to routes installed by that
 // protocol, so we never remove a route the daemon did not install.
 func (m *RouteManager) Delete(cfg RouteConfig) error {
+	// Include the full candidate identity when supplied. Legacy callers can still
+	// omit device/metric, while v3 always supplies both.
+
 	route := &netlink.Route{
 		Dst: cfg.Destination,
 		Gw:  cfg.Gateway,
@@ -100,6 +103,16 @@ func (m *RouteManager) Delete(cfg RouteConfig) error {
 		route.Protocol = netlink.RouteProtocol(cfg.Protocol)
 	}
 
+	if cfg.Metric > 0 {
+		route.Priority = cfg.Metric
+	}
+	if cfg.Device != "" {
+		link, err := netlink.LinkByName(cfg.Device)
+		if err != nil {
+			return err
+		}
+		route.LinkIndex = link.Attrs().Index
+	}
 	if err := netlink.RouteDel(route); err != nil {
 		return fmt.Errorf("failed to delete route to %s: %w", cfg.Destination, err)
 	}
